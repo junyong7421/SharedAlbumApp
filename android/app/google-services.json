@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "358024473338",
+    "project_id": "sharedalbumapp",
+    "storage_bucket": "sharedalbumapp.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:358024473338:android:fc46dad790c3a3e8263743",
+        "android_client_info": {
+          "package_name": "com.example.sharedalbumapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC1kReBswmsBP8auSFV9VNdefLLJ98yji8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
