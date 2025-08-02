@@ -1,29 +1,24 @@
 import 'package:flutter/material.dart';
 
-class SharedAlbumListScreen extends StatefulWidget {
-  const SharedAlbumListScreen({super.key});
+class EditAlbumListScreen extends StatefulWidget {
+  const EditAlbumListScreen({super.key});
 
   @override
-  State<SharedAlbumListScreen> createState() => _SharedAlbumListScreenState();
+  State<EditAlbumListScreen> createState() => _EditAlbumListScreenState();
 }
 
-class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
+class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
   final List<Map<String, dynamic>> _albums = [
-    {'name': '공경진', 'members': 5, 'photos': 50},
-    {'name': '캡스톤', 'members': 4, 'photos': 70},
-    {'name': '가족', 'members': 3, 'photos': 20},
-    {'name': '동아리', 'members': 6, 'photos': 35},
-    /* 스크롤 확인
-    {'name': '캡스톤', 'members': 4, 'photos': 70},
-    {'name': '가족', 'members': 3, 'photos': 20},
-    {'name': '동아리', 'members': 6, 'photos': 35},
-    */
+    {'name': '공경진', 'members': 5, 'photos': 50, 'isEditing': true},
+    {'name': '캡스톤', 'members': 4, 'photos': 70, 'isEditing': false},
+    {'name': '가족', 'members': 3, 'photos': 20, 'isEditing': false},
+    {'name': '동아리', 'members': 6, 'photos': 35, 'isEditing': false},
   ];
 
   final List<String> _iconPathsOn = [
     'assets/icons/image_off.png',
-    'assets/icons/list_on.png',
-    'assets/icons/edit_off.png',
+    'assets/icons/list_off.png',
+    'assets/icons/edit_on.png',
     'assets/icons/friend_off.png',
   ];
   final List<String> _iconPathsOff = [
@@ -33,7 +28,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
     'assets/icons/friend_off.png',
   ];
 
-  int _selectedIndex = 1;
+  int _selectedIndex = 2;
 
   @override
   Widget build(BuildContext context) {
@@ -57,7 +52,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       ),
                       const SizedBox(width: 10),
                       const Text(
-                        '공유앨범 목록 및 멤버관리',
+                        '편집',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
@@ -86,7 +81,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                             ),
                             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
                             child: Transform.translate(
-                              offset: const Offset(18, 0), // 전체 Row 오른쪽 이동
+                              offset: const Offset(18, 0), // 전체 Row를 오른쪽으로 이동
                               child: Row(
                                 children: [
                                   Image.asset(
@@ -112,7 +107,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                                             ),
                                             const SizedBox(width: 4),
                                             Transform.translate(
-                                              offset: const Offset(0, 1), // 멤버 수 아래로 이동
+                                              offset: const Offset(0, 1), // 멤버 수 살짝 아래로
                                               child: Text(
                                                 '${album['members']}',
                                                 style: const TextStyle(
@@ -121,6 +116,19 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                                                 ),
                                               ),
                                             ),
+                                            const Spacer(),
+                                            if (album['isEditing'])
+                                              Transform.translate(
+                                                offset: const Offset(-34, 12),
+                                                child: const Text(
+                                                  '편집 중',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w500,
+                                                    color: Color(0xFF625F8C),
+                                                  ),
+                                                ),
+                                              ),
                                           ],
                                         ),
                                         const SizedBox(height: 4),
