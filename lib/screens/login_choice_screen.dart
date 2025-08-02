@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'login_screen.dart';
+import 'signup_screen.dart';
 
 class LoginChoiceScreen extends StatelessWidget {
   const LoginChoiceScreen({super.key});
@@ -10,17 +12,17 @@ class LoginChoiceScreen extends StatelessWidget {
       body: Center(
         child: Container(
           width: 350,
-          height: 700, // ✅ 세로 길이 확장
+          height: 700,
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
           decoration: BoxDecoration(
             color: const Color(0xFFF6F9FF), // 내부 박스 색
             borderRadius: BorderRadius.circular(32),
           ),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.start, // ✅ 위부터 정렬
+            mainAxisAlignment: MainAxisAlignment.start,
             mainAxisSize: MainAxisSize.max,
             children: [
-              const SizedBox(height: 200), // ✅ 위쪽 여백 주기
+              const SizedBox(height: 200),
               Center(child: _buildGradientButton(context, 'Login')),
               const SizedBox(height: 16),
               Center(child: _buildGradientButton(context, 'Sign Up')),
@@ -32,26 +34,41 @@ class LoginChoiceScreen extends StatelessWidget {
   }
 
   Widget _buildGradientButton(BuildContext context, String text) {
-    return Container(
-      width: 200, // ✅ 가로 줄임
-      height: 48,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFFC6DCFF),
-            Color(0xFFD2D1FF),
-            Color(0xFFF5CFFF),
-          ],
+    return GestureDetector(
+      onTap: () {
+        if (text == 'Login') {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const LoginScreen()),
+          );
+        } else if (text == 'Sign Up') {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (context) => const SignUpScreen()),
+          );
+        }
+      },
+      child: Container(
+        width: 200,
+        height: 48,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: const LinearGradient(
+            colors: [
+              Color(0xFFC6DCFF),
+              Color(0xFFD2D1FF),
+              Color(0xFFF5CFFF),
+            ],
+          ),
         ),
-      ),
-      child: Center(
-        child: Text(
-          text,
-          style: const TextStyle(
-            color: Colors.white, // 글씨색
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
+        child: Center(
+          child: Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white, // 글씨색
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ),
