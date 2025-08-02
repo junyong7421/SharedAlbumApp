@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'screens/edit_screen.dart'; // 🔹 edit_screen.dart import
+import 'screens/shared_album_screen.dart';
+import 'screens/friend_manage_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,7 +22,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         scaffoldBackgroundColor: Color(0xFFEFEFFF), // 🔹 배경색 적용
       ),
-      home: EditScreen(), // 🔥 여기서 EditScreen을 첫 화면으로 설정
+      home: FriendManageScreen(), // 🔥 여기서 EditScreen을 첫 화면으로 설정
     );
   }
 }
