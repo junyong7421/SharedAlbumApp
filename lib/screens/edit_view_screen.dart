@@ -10,7 +10,7 @@ class EditViewScreen extends StatefulWidget {
 }
 
 class _EditViewScreenState extends State<EditViewScreen> {
-  int _selectedIndex = 0;
+  int _selectedIndex = 2;
   int _selectedTool = 0;
 
   final List<String> _iconPathsOn = [
@@ -29,7 +29,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   final String albumName = "공경진";
 
-  // ✅ 툴바용 아이콘 리스트 (Flutter 기본 아이콘 예시, 추후 이미지로 교체 가능)
   final List<IconData> _toolbarIcons = [
     Icons.mouse,
     Icons.grid_on,
@@ -49,12 +48,23 @@ class _EditViewScreenState extends State<EditViewScreen> {
           children: [
             Column(
               children: [
-                // ✅ 상단 유저 정보 + 앨범명
+                // ✅ 상단 유저 정보 + 앨범명 + 뒤로가기 버튼
                 Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pop(context);
+                        },
+                        child: const Icon(
+                          Icons.arrow_back_ios,
+                          color: Color(0xFF625F8C),
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       Image.asset(
                         'assets/icons/user.png',
                         width: 50,
@@ -97,11 +107,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
                     ],
                   ),
                 ),
+
                 const SizedBox(height: 12),
 
-                // ✅ 이미지 미리보기 (크기 줄임)
+                // ✅ 이미지 미리보기 (더 크게 수정됨)
                 Container(
-                  height: MediaQuery.of(context).size.height * 0.4, // 원래보다 작게
+                  height: MediaQuery.of(context).size.height * 0.55, // 🔹 크기 증가
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   decoration: BoxDecoration(
                     color: Colors.white,
@@ -125,7 +136,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
                 const SizedBox(height: 20),
 
-                // ✅ 툴바 추가 부분
+                // ✅ 툴바
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 20),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
