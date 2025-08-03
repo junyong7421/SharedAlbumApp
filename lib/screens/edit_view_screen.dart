@@ -112,10 +112,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
                 // ✅ 이미지 미리보기 (더 크게 수정됨)
                 Container(
-                  height: MediaQuery.of(context).size.height * 0.55, // 🔹 크기 증가
+                  height:
+                      MediaQuery.of(context).size.height * 0.55, // 🔹 크기 증가 유지
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: Colors.transparent, // ✅ 배경 제거
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: const [
                       BoxShadow(
@@ -129,7 +130,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
                     borderRadius: BorderRadius.circular(20),
                     child: Image.asset(
                       widget.imagePath,
-                      fit: BoxFit.contain,
+                      fit: BoxFit.cover, // ✅ 꽉 차게
+                      width: double.infinity, // ✅ 너비 채우기
+                      height: double.infinity, // ✅ 높이 채우기
                     ),
                   ),
                 ),
@@ -139,15 +142,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
                 // ✅ 툴바
                 Container(
                   margin: const EdgeInsets.symmetric(horizontal: 20),
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(18),
                     boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 4,
-                      ),
+                      BoxShadow(color: Colors.black12, blurRadius: 4),
                     ],
                   ),
                   child: Row(
@@ -163,7 +166,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(6),
                           decoration: BoxDecoration(
-                            color: isSelected ? const Color(0xFF397CFF) : Colors.transparent,
+                            color: isSelected
+                                ? const Color(0xFF397CFF)
+                                : Colors.transparent,
                             borderRadius: BorderRadius.circular(8),
                           ),
                           child: Icon(
