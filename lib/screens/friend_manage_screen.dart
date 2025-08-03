@@ -12,9 +12,9 @@ class _FriendManageScreenState extends State<FriendManageScreen> {
   int _selectedIndex = 3;
 
   final List<String> _iconPathsOn = [
-    'assets/icons/image_off.png',
-    'assets/icons/list_off.png',
-    'assets/icons/edit_off.png',
+    'assets/icons/image_on.png',
+    'assets/icons/list_on.png',
+    'assets/icons/edit_on.png',
     'assets/icons/friend_on.png',
   ];
 

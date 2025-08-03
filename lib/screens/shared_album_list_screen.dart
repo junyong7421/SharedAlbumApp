@@ -21,10 +21,10 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
   ];
 
   final List<String> _iconPathsOn = [
-    'assets/icons/image_off.png',
+    'assets/icons/image_on.png',
     'assets/icons/list_on.png',
-    'assets/icons/edit_off.png',
-    'assets/icons/friend_off.png',
+    'assets/icons/edit_on.png',
+    'assets/icons/friend_on.png',
   ];
   final List<String> _iconPathsOff = [
     'assets/icons/image_off.png',

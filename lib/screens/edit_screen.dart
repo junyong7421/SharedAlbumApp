@@ -226,7 +226,7 @@ class _EditScreenState extends State<EditScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      // ✅ 중앙 정렬된 흰 박스 + 이미지들
+                      // ✅ 중앙 정렬된 흰 박스 + 이미지들a
                       Center(
                         child: Container(
                           width: 300,
