@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "358024473338",
+    "firebase_url": "https://sharedalbumapp-default-rtdb.asia-southeast1.firebasedatabase.app",
     "project_id": "sharedalbumapp",
     "storage_bucket": "sharedalbumapp.firebasestorage.app"
   },
@@ -12,7 +13,20 @@
           "package_name": "com.example.sharedalbumapp"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "358024473338-g8shgo8vjoblll9v3mj80l7tkkqlvg5u.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.sharedalbumapp",
+            "certificate_hash": "fb51f3c8be771c709ec63aef83b64bcf8f5c3897"
+          }
+        },
+        {
+          "client_id": "358024473338-f5qs55uns1nf6mrr5q35lhssbspscho0.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyC1kReBswmsBP8auSFV9VNdefLLJ98yji8"
@@ -20,7 +34,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "358024473338-f5qs55uns1nf6mrr5q35lhssbspscho0.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }
