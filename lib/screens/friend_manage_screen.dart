@@ -1,0 +1,154 @@
+import 'package:flutter/material.dart';
+import 'add_user_popup.dart'; // 팝업 파일 import
+
+class FriendManageScreen extends StatefulWidget {
+  const FriendManageScreen({Key? key}) : super(key: key);
+
+  @override
+  State<FriendManageScreen> createState() => _FriendManageScreenState();
+}
+
+class _FriendManageScreenState extends State<FriendManageScreen> {
+  int _selectedIndex = 3;
+
+  final List<String> _iconPathsOn = [
+    'assets/icons/image_off.png',
+    'assets/icons/list_off.png',
+    'assets/icons/edit_off.png',
+    'assets/icons/friend_on.png',
+  ];
+
+  final List<String> _iconPathsOff = [
+    'assets/icons/image_off.png',
+    'assets/icons/list_off.png',
+    'assets/icons/edit_off.png',
+    'assets/icons/friend_off.png',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFE6EBFE),
+      body: Stack(
+        children: [
+          Column(
+            children: [
+              // ✅ 상단 사용자 정보 + 친구추가 아이콘
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Image.asset('assets/icons/user.png', width: 50, height: 50),
+                    const SizedBox(width: 10),
+                    const Text(
+                      '친구관리',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF625F8C),
+                      ),
+                    ),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () {
+                        showDialog(
+                          context: context,
+                          builder: (_) => const AddUserPopup(),
+                        );
+                      },
+                      child: Image.asset(
+                        'assets/icons/user_plus.png',
+                        width: 36,
+                        height: 36,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ✅ 친구 리스트 박스
+              SizedBox(
+                height: MediaQuery.of(context).size.height - 220,
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 40),
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF6F9FF),
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: ListView.builder(
+                    itemCount: 1, // 현재는 1명만 가정
+                    itemBuilder: (context, index) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Row(
+                          children: [
+                            Image.asset(
+                              'assets/icons/user2.png',
+                              width: 28,
+                              height: 28,
+                            ),
+                            const SizedBox(width: 10),
+                            const Text(
+                              '정가을',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Color(0xFF625F8C),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          // ✅ 하단 네비게이션 바
+          Positioned(
+            bottom: 40,
+            left: 20,
+            right: 20,
+            child: Container(
+              height: 70,
+              decoration: BoxDecoration(
+                color: const Color(0xFFF6F9FF),
+                borderRadius: BorderRadius.circular(35),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 6,
+                    offset: Offset(2, 2),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: List.generate(4, (index) {
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _selectedIndex = index;
+                      });
+                    },
+                    child: Image.asset(
+                      _selectedIndex == index
+                          ? _iconPathsOn[index]
+                          : _iconPathsOff[index],
+                      width: index == 2 ? 38 : 36,
+                      height: index == 2 ? 38 : 36,
+                      fit: BoxFit.contain,
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
