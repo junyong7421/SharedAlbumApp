@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'edit_view_screen.dart';
 
 class EditScreen extends StatefulWidget {
   const EditScreen({Key? key}) : super(key: key);
@@ -42,7 +43,7 @@ class _EditScreenState extends State<EditScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ✅ 상단 사용자 정보
+                // 상단 사용자 정보
                 Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Row(
@@ -92,14 +93,40 @@ class _EditScreenState extends State<EditScreen> {
                 ),
 
                 const SizedBox(height: 40),
-
-                // ✅ 고양이 사진 + 화살표 분리
+                // ✅ 편집 중인 사진 텍스트 박스
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.only(left: 24, bottom: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      gradient: const LinearGradient(
+                        colors: [
+                          Color(0xFFC6DCFF),
+                          Color(0xFFD2D1FF),
+                          Color(0xFFF5CFFF),
+                        ],
+                      ),
+                    ),
+                    child: const Text(
+                      '편집 중인 사진',
+                      style: TextStyle(
+                        color: Color(0xFFF6F9FF),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // 고양이 사진 + 화살표 분리
                 Center(
                   child: Row(
-                    // 🔹 Row를 밖으로 꺼내고, 가운데 이미지만 감쌈
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // 🔸 왼쪽 화살표 (밖)
                       IconButton(
                         icon: const Icon(Icons.arrow_left, size: 32),
                         onPressed: () {
@@ -113,34 +140,45 @@ class _EditScreenState extends State<EditScreen> {
 
                       const SizedBox(width: 8),
 
-                      // ✅ 이미지만 흰색 박스로 감쌈
-                      Container(
-                        width: 140,
-                        height: 160,
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Color(0xFFF6F9FF), // ← 이 부분만 박스 처리
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 5,
-                              offset: Offset(2, 2),
+                      // ✅ 이미지 클릭 시 편집 페이지로 이동
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => EditViewScreen(
+                                imagePath: _imagePaths[_currentIndex],
+                              ),
                             ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.asset(
-                            _imagePaths[_currentIndex],
-                            fit: BoxFit.cover,
+                          );
+                        },
+                        child: Container(
+                          width: 140,
+                          height: 160,
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF6F9FF),
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 5,
+                                offset: Offset(2, 2),
+                              ),
+                            ],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.asset(
+                              _imagePaths[_currentIndex],
+                              fit: BoxFit.cover,
+                            ),
                           ),
                         ),
                       ),
 
                       const SizedBox(width: 8),
 
-                      // 🔸 오른쪽 화살표 (밖)
                       IconButton(
                         icon: const Icon(Icons.arrow_right, size: 32),
                         onPressed: () {
@@ -160,7 +198,6 @@ class _EditScreenState extends State<EditScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      // ✅ 왼쪽 정렬된 텍스트 라벨
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Container(
@@ -188,7 +225,7 @@ class _EditScreenState extends State<EditScreen> {
                           ),
                         ),
                       ),
-
+                      const SizedBox(height: 12),
                       // ✅ 중앙 정렬된 흰 박스 + 이미지들
                       Center(
                         child: Container(
@@ -236,7 +273,7 @@ class _EditScreenState extends State<EditScreen> {
               ],
             ),
 
-            // ✅ 하단 커스텀 네비게이션 바
+            // 하단 탭바
             Positioned(
               bottom: 20,
               left: 20,
@@ -244,7 +281,7 @@ class _EditScreenState extends State<EditScreen> {
               child: Container(
                 height: 70,
                 decoration: BoxDecoration(
-                  color: Color(0xFFF6F9FF),
+                  color: const Color(0xFFF6F9FF),
                   borderRadius: BorderRadius.circular(35),
                   boxShadow: [
                     BoxShadow(
