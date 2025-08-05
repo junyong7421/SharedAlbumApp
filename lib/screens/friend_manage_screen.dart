@@ -117,7 +117,7 @@ class _FriendManageScreenState extends State<FriendManageScreen> {
 
           // ✅ 하단바 고정
           Positioned(
-            bottom: 20,
+            bottom: 40,
             left: 20,
             right: 20,
             child: CustomBottomNavBar(selectedIndex: 3),
