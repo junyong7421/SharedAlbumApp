@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
 import 'edit_screen.dart'; // ✅ EditScreen import 추가
+import '../widgets/user_icon_button.dart';
 
 class EditAlbumListScreen extends StatefulWidget {
   const EditAlbumListScreen({super.key});
@@ -34,11 +35,7 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Image.asset(
-                        'assets/icons/user.png',
-                        width: 50,
-                        height: 50,
-                      ),
+                      const UserIconButton(),
                       const SizedBox(width: 10),
                       const Text(
                         '편집',
@@ -99,10 +96,12 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                                     const SizedBox(width: 20),
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Row(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
                                               Text(
                                                 album['name'],
@@ -131,7 +130,8 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                                                     '편집 중',
                                                     style: TextStyle(
                                                       fontSize: 14,
-                                                      fontWeight: FontWeight.w500,
+                                                      fontWeight:
+                                                          FontWeight.w500,
                                                       color: Color(0xFF625F8C),
                                                     ),
                                                   ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'edit_view_screen.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
+import '../widgets/user_icon_button.dart';
 
 class EditScreen extends StatefulWidget {
   const EditScreen({Key? key}) : super(key: key);
@@ -50,11 +51,7 @@ class _EditScreenState extends State<EditScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Image.asset(
-                        'assets/icons/user.png',
-                        width: 50,
-                        height: 50,
-                      ),
+                      const UserIconButton(),
                       const SizedBox(width: 10),
                       const Text(
                         '편집',

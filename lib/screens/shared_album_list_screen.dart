@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
+import '../widgets/user_icon_button.dart';
 
 class SharedAlbumListScreen extends StatefulWidget {
   const SharedAlbumListScreen({super.key});
@@ -51,11 +52,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Image.asset(
-                        'assets/icons/user.png',
-                        width: 50,
-                        height: 50,
-                      ),
+                      const UserIconButton(),
                       const SizedBox(width: 10),
                       const Text(
                         '공유앨범 목록 및 멤버관리',

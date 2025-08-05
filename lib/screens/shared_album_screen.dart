@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
+import '../widgets/user_icon_button.dart';
 
 class SharedAlbumScreen extends StatefulWidget {
   const SharedAlbumScreen({Key? key}) : super(key: key);
@@ -28,48 +29,65 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
       backgroundColor: const Color(0xFFE6EBFE),
       body: Stack(
         children: [
-          Column(
-            children: [
-              // 상단 사용자 정보
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Image.asset('assets/icons/user.png', width: 50, height: 50),
-                    const SizedBox(width: 10),
-                    const Text(
-                      '공유앨범',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF625F8C),
+          Padding(
+            padding: const EdgeInsets.only(top: 60),
+            child: Column(
+              children: [
+                // 🔹 상단 유저 정보
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const UserIconButton(),
+                      const SizedBox(width: 10),
+                      const Text(
+                        '공유앨범',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF625F8C),
+                        ),
                       ),
-                    ),
-                    const Spacer(),
-                  ],
+                      const Spacer(),
+                    ],
+                  ),
                 ),
-              ),
 
-              // 가운데 박스
-              SizedBox(
-                height: MediaQuery.of(context).size.height - 220,
-                child: Container(
+                const SizedBox(height: 16),
+
+                // 🔹 가운데 고정 박스
+                Container(
                   margin: const EdgeInsets.symmetric(horizontal: 40),
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF6F9FF),
                     borderRadius: BorderRadius.circular(30),
                   ),
-                  child: _selectedAlbumTitle == null
-                      ? _buildMainAlbumContents()
-                      : _buildExpandedAlbumView(),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ✅ "앨범 선택 안 했을 때만" Shared Album 헤더 보여줌
+                      if (_selectedAlbumTitle == null) ...[
+                        _buildSharedAlbumHeader(),
+                        const SizedBox(height: 12),
+                      ],
+
+                      // ✅ 앨범 리스트 또는 확장 보기 (박스 높이 줄임)
+                      SizedBox(
+                        height: MediaQuery.of(context).size.height - 380,
+                        child: _selectedAlbumTitle == null
+                            ? _buildMainAlbumList()
+                            : _buildExpandedAlbumView(),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
 
-          // 하단바
+          // 🔹 하단 네비게이션 바
           Positioned(
             bottom: 40,
             left: 20,
@@ -81,20 +99,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     );
   }
 
-  // 새 앨범 추가
-  void _addNewAlbum() {
-    setState(() {
-      _albums.add({
-        'title': '새 앨범 ${_albums.length + 1}',
-        'image': 'assets/images/sample3.png',
-      });
-    });
-  }
-
-  // Shared Album 헤더 (왼쪽 정렬 + 오른쪽 +버튼)
+  // Shared Album 고정 헤더
   Widget _buildSharedAlbumHeader() {
     return Container(
-      margin: const EdgeInsets.only(bottom: 30),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(30),
@@ -134,16 +141,14 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     );
   }
 
-  // 앨범 리스트 화면
-  Widget _buildMainAlbumContents() {
+  // 앨범 리스트
+  Widget _buildMainAlbumList() {
     return ListView.builder(
-      itemCount: _albums.length + 1,
+      itemCount: _albums.length,
       itemBuilder: (context, index) {
-        if (index == 0) return _buildSharedAlbumHeader();
-
-        final album = _albums[index - 1];
+        final album = _albums[index];
         return Padding(
-          padding: const EdgeInsets.only(bottom: 16),
+          padding: const EdgeInsets.only(top: 12),
           child: _buildAlbumCard(album['title']!, album['image']!),
         );
       },
@@ -230,5 +235,14 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
         ),
       ),
     );
+  }
+
+  void _addNewAlbum() {
+    setState(() {
+      _albums.add({
+        'title': '새 앨범 ${_albums.length + 1}',
+        'image': 'assets/images/sample3.png',
+      });
+    });
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
+import '../widgets/user_icon_button.dart';
 
 class EditViewScreen extends StatefulWidget {
   final String imagePath;
@@ -66,11 +67,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
-                      Image.asset(
-                        'assets/icons/user.png',
-                        width: 50,
-                        height: 50,
-                      ),
+                      const UserIconButton(),
                       const SizedBox(width: 10),
                       const Text(
                         '편집',
