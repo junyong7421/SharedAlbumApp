@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 
@@ -21,6 +23,29 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
   ];
 
   final List<Map<String, dynamic>> _albums = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAlbums();
+  }
+
+  Future<void> _saveAlbums() async {
+    final prefs = await SharedPreferences.getInstance();
+    final encoded = jsonEncode(_albums);
+    await prefs.setString('albums', encoded);
+  }
+
+  Future<void> _loadAlbums() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedData = prefs.getString('albums');
+    if (storedData != null) {
+      setState(() {
+        _albums.clear();
+        _albums.addAll(List<Map<String, dynamic>>.from(jsonDecode(storedData)));
+      });
+    }
+  }
 
   void _showAddAlbumDialog() {
     _albumNameController.clear();
@@ -82,6 +107,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                           'images': selectedImage != null ? [selectedImage!] : [],
                         });
                       });
+                      _saveAlbums();
                     }
                     Navigator.pop(context);
                   },
@@ -110,6 +136,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                   setState(() {
                     _albums[albumIndex]['images'].add(imgPath);
                   });
+                  _saveAlbums();
                   Navigator.pop(context);
                 },
                 child: Image.asset(imgPath, width: 60, height: 60, fit: BoxFit.cover),
@@ -126,6 +153,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
       _albums.removeAt(index);
       _selectedAlbumTitle = null;
     });
+    _saveAlbums();
   }
 
   @override
@@ -133,7 +161,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
       bottomNavigationBar: const Padding(
-        padding: EdgeInsets.only(bottom: 20, left: 20, right: 20),
+        padding: EdgeInsets.only(bottom: 40, left: 20, right: 20),
         child: CustomBottomNavBar(selectedIndex: 0),
       ),
       body: SafeArea(
@@ -143,10 +171,10 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
-                children: [
-                  const UserIconButton(),
-                  const SizedBox(width: 10),
-                  const Text(
+                children: const [
+                  UserIconButton(),
+                  SizedBox(width: 10),
+                  Text(
                     '공유앨범',
                     style: TextStyle(
                       fontSize: 18,
@@ -154,14 +182,14 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                       color: Color(0xFF625F8C),
                     ),
                   ),
-                  const Spacer(),
+                  Spacer(),
                 ],
               ),
             ),
             const SizedBox(height: 16),
             Expanded(
               child: Container(
-                 margin: const EdgeInsets.fromLTRB(40, 0, 40, 60),
+                margin: const EdgeInsets.fromLTRB(40, 0, 40, 60),
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: const Color(0xFFF6F9FF),
