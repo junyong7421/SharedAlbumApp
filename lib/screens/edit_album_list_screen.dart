@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/custom_bottom_nav_bar.dart';
 
 class EditAlbumListScreen extends StatefulWidget {
   const EditAlbumListScreen({super.key});
@@ -73,13 +74,19 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                       children: List.generate(_albums.length, (index) {
                         final album = _albums[index];
                         return Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 10,
+                          ),
                           child: Container(
                             decoration: BoxDecoration(
                               color: const Color(0xFFF6F9FF),
                               borderRadius: BorderRadius.circular(24),
                             ),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 24,
+                            ),
                             child: Transform.translate(
                               offset: const Offset(18, 0), // 전체 Row를 오른쪽으로 이동
                               child: Row(
@@ -92,10 +99,12 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                                   const SizedBox(width: 20), // 이미지와 텍스트 사이 간격
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Row(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
                                             Text(
                                               album['name'],
@@ -107,7 +116,10 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                                             ),
                                             const SizedBox(width: 4),
                                             Transform.translate(
-                                              offset: const Offset(0, 1), // 멤버 수 살짝 아래로
+                                              offset: const Offset(
+                                                0,
+                                                1,
+                                              ), // 멤버 수 살짝 아래로
                                               child: Text(
                                                 '${album['members']}',
                                                 style: const TextStyle(
@@ -153,46 +165,11 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                 ),
               ],
             ),
-
-            // ✅ 하단 커스텀 네비게이션 바
             Positioned(
               bottom: 20,
               left: 20,
               right: 20,
-              child: Container(
-                height: 70,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF6F9FF),
-                  borderRadius: BorderRadius.circular(35),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black12,
-                      blurRadius: 6,
-                      offset: const Offset(2, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: List.generate(4, (index) {
-                    return GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _selectedIndex = index;
-                        });
-                      },
-                      child: Image.asset(
-                        _selectedIndex == index
-                            ? _iconPathsOn[index]
-                            : _iconPathsOff[index],
-                        width: index == 2 ? 38 : 36,
-                        height: index == 2 ? 38 : 36,
-                        fit: BoxFit.contain,
-                      ),
-                    );
-                  }),
-                ),
-              ),
+              child: CustomBottomNavBar(selectedIndex: 2),
             ),
           ],
         ),

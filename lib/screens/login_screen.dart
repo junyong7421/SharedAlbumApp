@@ -1,17 +1,26 @@
 import 'package:flutter/material.dart';
-import 'signup_screen.dart'; // 🔹 회원가입 화면 import
+import 'signup_screen.dart';
+import 'shared_album_screen.dart'; // 🔹 로그인 성공 시 이동할 화면 import
 
 class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
 
+  // 🔹 하드코딩된 이메일과 비밀번호
+  final String _validEmail = 'rhdrudwls@gmail.com';
+  final String _validPassword = 'rhdrudwls';
+
   @override
   Widget build(BuildContext context) {
+    // 🔹 컨트롤러 추가
+    final TextEditingController emailController = TextEditingController();
+    final TextEditingController passwordController = TextEditingController();
+
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
       body: Center(
         child: Container(
-          width: 350,   // ✅ 가로 고정
-          height: 380,  // ✅ 세로 고정
+          width: 350,
+          height: 400, // 🔹 높이 살짝 늘림
           padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
           decoration: BoxDecoration(
             color: const Color(0xFFF6F9FF),
@@ -20,11 +29,31 @@ class LoginScreen extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildTextField('가입 시 입력한 이메일 주소', false),
+              _buildTextField('가입 시 입력한 이메일 주소', false, emailController),
               const SizedBox(height: 12),
-              _buildTextField('비밀번호', true),
+              _buildTextField('비밀번호', true, passwordController),
               const SizedBox(height: 20),
-              _buildGradientButton('Login'),
+
+              // 🔹 로그인 버튼 클릭 처리
+              GestureDetector(
+                onTap: () {
+                  final enteredEmail = emailController.text.trim();
+                  final enteredPassword = passwordController.text.trim();
+
+                  if (enteredEmail == _validEmail && enteredPassword == _validPassword) {
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (context) => const SharedAlbumScreen()),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('이메일 또는 비밀번호가 올바르지 않습니다.')),
+                    );
+                  }
+                },
+                child: _buildGradientButton('Login'),
+              ),
+
               const SizedBox(height: 24),
               GestureDetector(
                 onTap: () {
@@ -38,7 +67,7 @@ class LoginScreen extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 14,
                     color: Color(0xFF404040),
-                    decoration: TextDecoration.underline, // 누를 수 있는 느낌
+                    decoration: TextDecoration.underline,
                   ),
                 ),
               ),
@@ -55,8 +84,9 @@ class LoginScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTextField(String hint, bool isPassword) {
+  Widget _buildTextField(String hint, bool isPassword, TextEditingController controller) {
     return TextField(
+      controller: controller,
       obscureText: isPassword,
       decoration: InputDecoration(
         contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
@@ -83,10 +113,10 @@ class LoginScreen extends StatelessWidget {
           ],
         ),
       ),
-      child: const Center(
+      child: Center(
         child: Text(
-          'Login',
-          style: TextStyle(
+          text, // 🔹 하드코딩된 'Login' → 매개변수로 변경됨
+          style: const TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.w600,
             fontSize: 16,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'add_user_popup.dart'; // 팝업 파일 import
+import '../widgets/custom_bottom_nav_bar.dart';
 
 class FriendManageScreen extends StatefulWidget {
   const FriendManageScreen({Key? key}) : super(key: key);
@@ -107,46 +108,12 @@ class _FriendManageScreenState extends State<FriendManageScreen> {
             ],
           ),
 
-          // ✅ 하단 네비게이션 바
-          Positioned(
-            bottom: 40,
-            left: 20,
-            right: 20,
-            child: Container(
-              height: 70,
-              decoration: BoxDecoration(
-                color: const Color(0xFFF6F9FF),
-                borderRadius: BorderRadius.circular(35),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.black12,
-                    blurRadius: 6,
-                    offset: Offset(2, 2),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: List.generate(4, (index) {
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _selectedIndex = index;
-                      });
-                    },
-                    child: Image.asset(
-                      _selectedIndex == index
-                          ? _iconPathsOn[index]
-                          : _iconPathsOff[index],
-                      width: index == 2 ? 38 : 36,
-                      height: index == 2 ? 38 : 36,
-                      fit: BoxFit.contain,
-                    ),
-                  );
-                }),
-              ),
+         Positioned(
+              bottom: 20,
+              left: 20,
+              right: 20,
+              child: CustomBottomNavBar(selectedIndex: 3),
             ),
-          ),
         ],
       ),
     );
