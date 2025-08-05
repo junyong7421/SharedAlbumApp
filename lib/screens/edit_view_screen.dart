@@ -4,8 +4,13 @@ import '../widgets/user_icon_button.dart';
 
 class EditViewScreen extends StatefulWidget {
   final String imagePath;
+  final String albumName; // 🔹 앨범 이름 추가
 
-  const EditViewScreen({Key? key, required this.imagePath}) : super(key: key);
+  const EditViewScreen({
+    Key? key,
+    required this.imagePath,
+    required this.albumName, // 🔹 생성자에 추가
+  }) : super(key: key);
 
   @override
   State<EditViewScreen> createState() => _EditViewScreenState();
@@ -28,8 +33,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
     'assets/icons/edit_off.png',
     'assets/icons/friend_off.png',
   ];
-
-  final String albumName = "공경진";
 
   final List<IconData> _toolbarIcons = [
     Icons.mouse,
@@ -94,7 +97,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                           ),
                         ),
                         child: Text(
-                          albumName,
+                          widget.albumName, // 🔹 전달받은 앨범명 사용
                           style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
@@ -108,13 +111,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
                 const SizedBox(height: 12),
 
-                // ✅ 이미지 미리보기 (더 크게 수정됨)
+                // ✅ 이미지 미리보기
                 Container(
-                  height:
-                      MediaQuery.of(context).size.height * 0.55, // 🔹 크기 증가 유지
+                  height: MediaQuery.of(context).size.height * 0.55,
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   decoration: BoxDecoration(
-                    color: Colors.transparent, // ✅ 배경 제거
+                    color: Colors.transparent,
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: const [
                       BoxShadow(
@@ -128,9 +130,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
                     borderRadius: BorderRadius.circular(20),
                     child: Image.asset(
                       widget.imagePath,
-                      fit: BoxFit.cover, // ✅ 꽉 차게
-                      width: double.infinity, // ✅ 너비 채우기
-                      height: double.infinity, // ✅ 높이 채우기
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      height: double.infinity,
                     ),
                   ),
                 ),

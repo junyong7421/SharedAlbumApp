@@ -1,39 +1,25 @@
 import 'package:flutter/material.dart';
 import 'edit_view_screen.dart';
+import 'edit_album_list_screen.dart'; // 🔹 반드시 추가
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 
 class EditScreen extends StatefulWidget {
-  const EditScreen({Key? key}) : super(key: key);
+  final String albumName;
+
+  const EditScreen({Key? key, required this.albumName}) : super(key: key);
 
   @override
   State<EditScreen> createState() => _EditScreenState();
 }
 
 class _EditScreenState extends State<EditScreen> {
-  int _selectedIndex = 2;
   int _currentIndex = 0;
 
   final List<String> _imagePaths = [
     'assets/images/sample1.jpg',
     'assets/images/sample2.jpg',
   ];
-
-  final List<String> _iconPathsOn = [
-    'assets/icons/image_on.png',
-    'assets/icons/list_on.png',
-    'assets/icons/edit_on.png',
-    'assets/icons/friend_on.png',
-  ];
-
-  final List<String> _iconPathsOff = [
-    'assets/icons/image_off.png',
-    'assets/icons/list_off.png',
-    'assets/icons/edit_off.png',
-    'assets/icons/friend_off.png',
-  ];
-
-  final String albumName = "공경진";
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +31,7 @@ class _EditScreenState extends State<EditScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // 상단 사용자 정보
+                // ✅ 상단 사용자 정보
                 Padding(
                   padding: const EdgeInsets.all(16.0),
                   child: Row(
@@ -78,7 +64,7 @@ class _EditScreenState extends State<EditScreen> {
                           ),
                         ),
                         child: Text(
-                          albumName,
+                          widget.albumName,
                           style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
@@ -90,8 +76,48 @@ class _EditScreenState extends State<EditScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 40),
-                // ✅ 편집 중인 사진 텍스트 박스
+                const SizedBox(height: 20), // 🔹 간격 줄임
+
+                // ✅ 편집 목록 버튼
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const EditAlbumListScreen(),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(left: 24, bottom: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        gradient: const LinearGradient(
+                          colors: [
+                            Color(0xFFC6DCFF),
+                            Color(0xFFD2D1FF),
+                            Color(0xFFF5CFFF),
+                          ],
+                        ),
+                      ),
+                      child: const Text(
+                        '편집 목록',
+                        style: TextStyle(
+                          color: Color(0xFFF6F9FF),
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // ✅ 편집 중인 사진
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Container(
@@ -119,8 +145,10 @@ class _EditScreenState extends State<EditScreen> {
                     ),
                   ),
                 ),
+
                 const SizedBox(height: 12),
-                // 고양이 사진 + 화살표 분리
+
+                // ✅ 화살표 + 중앙 사진
                 Center(
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -131,14 +159,11 @@ class _EditScreenState extends State<EditScreen> {
                           setState(() {
                             _currentIndex =
                                 (_currentIndex - 1 + _imagePaths.length) %
-                                _imagePaths.length;
+                                    _imagePaths.length;
                           });
                         },
                       ),
-
                       const SizedBox(width: 8),
-
-                      // ✅ 이미지 클릭 시 편집 페이지로 이동
                       GestureDetector(
                         onTap: () {
                           Navigator.push(
@@ -146,6 +171,7 @@ class _EditScreenState extends State<EditScreen> {
                             MaterialPageRoute(
                               builder: (context) => EditViewScreen(
                                 imagePath: _imagePaths[_currentIndex],
+                                albumName: widget.albumName,
                               ),
                             ),
                           );
@@ -157,7 +183,7 @@ class _EditScreenState extends State<EditScreen> {
                           decoration: BoxDecoration(
                             color: const Color(0xFFF6F9FF),
                             borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
+                            boxShadow: const [
                               BoxShadow(
                                 color: Colors.black12,
                                 blurRadius: 5,
@@ -174,9 +200,7 @@ class _EditScreenState extends State<EditScreen> {
                           ),
                         ),
                       ),
-
                       const SizedBox(width: 8),
-
                       IconButton(
                         icon: const Icon(Icons.arrow_right, size: 32),
                         onPressed: () {
@@ -192,6 +216,7 @@ class _EditScreenState extends State<EditScreen> {
 
                 const SizedBox(height: 30),
 
+                // ✅ 편집된 사진
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
@@ -224,7 +249,6 @@ class _EditScreenState extends State<EditScreen> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      // ✅ 중앙 정렬된 흰 박스 + 이미지들a
                       Center(
                         child: Container(
                           width: 300,
@@ -232,7 +256,7 @@ class _EditScreenState extends State<EditScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
+                            boxShadow: const [
                               BoxShadow(
                                 color: Colors.black12,
                                 blurRadius: 4,
@@ -270,6 +294,8 @@ class _EditScreenState extends State<EditScreen> {
                 const SizedBox(height: 70),
               ],
             ),
+
+            // ✅ 하단 네비게이션 바
             Positioned(
               bottom: 20,
               left: 20,
