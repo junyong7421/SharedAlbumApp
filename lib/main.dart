@@ -28,7 +28,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         scaffoldBackgroundColor: Color(0xFFEFEFFF), // 🔹 배경색 적용
       ),
-      home: SharedAlbumScreen(), // FriendManageScreen EditAlbumListScreen SharedAlbumListScreen LoginChoiceScreen LoginScreen SignUpScreen 🔥 여기서 EditScreen을 첫 화면으로 설정
+      home: LoginChoiceScreen(), // FriendManageScreen EditAlbumListScreen SharedAlbumListScreen LoginChoiceScreen LoginScreen SignUpScreen 🔥 여기서 EditScreen을 첫 화면으로 설정
     );
   }
 }
