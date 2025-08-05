@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'email_input_popup.dart';
 
 class AddUserPopup extends StatelessWidget {
   const AddUserPopup({super.key});
@@ -16,7 +17,15 @@ class AddUserPopup extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildGradientButton('기존 사용자 추가'),
+            GestureDetector(
+              onTap: () {
+                showDialog(
+                  context: context,
+                  builder: (context) => const EmailInputPopup(),
+                );
+              },
+              child: _buildGradientButton('기존 사용자 추가'),
+            ),
             const SizedBox(height: 20),
             _buildGradientButton('새로운 사용자 추가'),
           ],

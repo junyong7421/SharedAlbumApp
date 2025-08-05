@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
+import 'edit_view_screen.dart';
 
 class SharedAlbumScreen extends StatefulWidget {
   const SharedAlbumScreen({Key? key}) : super(key: key);
@@ -13,6 +14,7 @@ class SharedAlbumScreen extends StatefulWidget {
 
 class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
   String? _selectedAlbumTitle;
+  int? _selectedImageIndex;
   final TextEditingController _albumNameController = TextEditingController();
 
   final List<String> _sampleImages = [
@@ -49,75 +51,158 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
   void _showAddAlbumDialog() {
     _albumNameController.clear();
-    String? selectedImage;
+    List<String> selectedImages = [];
 
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return StatefulBuilder(
           builder: (context, setStateDialog) {
-            return AlertDialog(
-              title: const Text("새 앨범 만들기"),
-              content: SingleChildScrollView(
+            return Dialog(
+              backgroundColor: const Color(0xFFF6F9FF),
+              shape: RoundedRectangleBorder(
+                side: const BorderSide(color: Color(0xFF625F8C), width: 2),
+                borderRadius: BorderRadius.circular(30),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 30,
+                  horizontal: 24,
+                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    const Center(
+                      child: Text(
+                        "새 앨범 만들기",
+                        style: TextStyle(
+                          fontSize: 20,
+                          color: Color(0xFF625F8C),
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
                     TextField(
                       controller: _albumNameController,
-                      decoration: const InputDecoration(hintText: "앨범 이름을 입력하세요"),
+                      cursorColor: Color(0xFF625F8C),
+                      style: const TextStyle(color: Color(0xFF625F8C)),
+                      decoration: InputDecoration(
+                        hintText: "앨범 이름을 입력하세요.",
+                        hintStyle: const TextStyle(color: Color(0xFF625F8C)),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(30),
+                          borderSide: const BorderSide(
+                            color: Color(0xFF625F8C),
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(30),
+                          borderSide: const BorderSide(
+                            color: Color(0xFF625F8C),
+                            width: 2,
+                          ),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 20,
+                        ),
+                      ),
                     ),
-                    const SizedBox(height: 12),
-                    const Text("사진 선택 (선택사항)", style: TextStyle(fontSize: 14)),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 20),
+                    const Text(
+                      "사진 선택 (선택사항)",
+                      style: TextStyle(fontSize: 14, color: Color(0xFF625F8C)),
+                    ),
+                    const SizedBox(height: 8),
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: _sampleImages.map((imgPath) {
+                        final isSelected = selectedImages.contains(imgPath);
                         return GestureDetector(
                           onTap: () {
                             setStateDialog(() {
-                              selectedImage = imgPath;
+                              if (isSelected) {
+                                selectedImages.remove(imgPath);
+                              } else {
+                                selectedImages.add(imgPath);
+                              }
                             });
                           },
                           child: Container(
                             decoration: BoxDecoration(
                               border: Border.all(
-                                color: selectedImage == imgPath ? Colors.blue : Colors.transparent,
+                                color: isSelected
+                                    ? Color(0xFF625F8C)
+                                    : Colors.transparent,
                                 width: 2,
                               ),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Image.asset(imgPath, width: 60, height: 60, fit: BoxFit.cover),
+                            child: Image.asset(
+                              imgPath,
+                              width: 60,
+                              height: 60,
+                              fit: BoxFit.cover,
+                            ),
                           ),
                         );
                       }).toList(),
                     ),
+                    const SizedBox(height: 30),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _buildGradientActionButton("취소", () {
+                          Navigator.pop(context);
+                        }),
+                        _buildGradientActionButton("확인", () {
+                          final albumName = _albumNameController.text.trim();
+                          if (albumName.isNotEmpty) {
+                            setState(() {
+                              _albums.add({
+                                'title': albumName,
+                                'images': selectedImages,
+                              });
+                            });
+                            _saveAlbums();
+                          }
+                          Navigator.pop(context);
+                        }),
+                      ],
+                    ),
                   ],
                 ),
               ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context), child: const Text("취소")),
-                TextButton(
-                  onPressed: () {
-                    final albumName = _albumNameController.text.trim();
-                    if (albumName.isNotEmpty) {
-                      setState(() {
-                        _albums.add({
-                          'title': albumName,
-                          'images': selectedImage != null ? [selectedImage!] : [],
-                        });
-                      });
-                      _saveAlbums();
-                    }
-                    Navigator.pop(context);
-                  },
-                  child: const Text("확인"),
-                ),
-              ],
             );
           },
         );
       },
+    );
+  }
+
+  Widget _buildGradientActionButton(String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 100,
+        height: 40,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
     );
   }
 
@@ -139,7 +224,12 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                   _saveAlbums();
                   Navigator.pop(context);
                 },
-                child: Image.asset(imgPath, width: 60, height: 60, fit: BoxFit.cover),
+                child: Image.asset(
+                  imgPath,
+                  width: 60,
+                  height: 60,
+                  fit: BoxFit.cover,
+                ),
               );
             }).toList(),
           ),
@@ -296,7 +386,10 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                       ),
                       const Spacer(),
                       IconButton(
-                        icon: const Icon(Icons.delete, color: Color(0xFF625F8C)),
+                        icon: const Icon(
+                          Icons.delete,
+                          color: Color(0xFF625F8C),
+                        ),
                         onPressed: () => _deleteAlbum(index),
                       ),
                     ],
@@ -322,56 +415,139 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
   Widget _buildExpandedAlbumView() {
     final album = _albums.firstWhere((e) => e['title'] == _selectedAlbumTitle);
-    final index = _albums.indexOf(album);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(
-              _selectedAlbumTitle ?? '',
-              style: const TextStyle(
-                color: Color(0xFF625F8C),
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
+    if (_selectedImageIndex == null) {
+      return Column(
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back, color: Color(0xFF625F8C)),
+                onPressed: () {
+                  setState(() {
+                    _selectedAlbumTitle = null;
+                  });
+                },
               ),
+              const Spacer(),
+            ],
+          ),
+          Expanded(
+            child: GridView.count(
+              crossAxisCount: 3,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+              children: List.generate(album['images'].length, (i) {
+                final imgPath = album['images'][i];
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _selectedImageIndex = i;
+                    });
+                  },
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.asset(imgPath, fit: BoxFit.cover),
+                  ),
+                );
+              }),
             ),
-            const Spacer(),
-            IconButton(
-              onPressed: () => _showAddPhotoDialog(index),
-              icon: const Icon(Icons.add, color: Color(0xFF625F8C)),
-            ),
-            IconButton(
-              onPressed: () {
+          ),
+        ],
+      );
+    } else {
+      final PageController _pageController = PageController(
+        initialPage: _selectedImageIndex!,
+      );
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back, color: Color(0xFF625F8C)),
+                onPressed: () {
+                  setState(() {
+                    _selectedImageIndex = null;
+                  });
+                },
+              ),
+              const Spacer(),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: PageView.builder(
+              controller: _pageController,
+              itemCount: album['images'].length,
+              onPageChanged: (index) {
                 setState(() {
-                  _selectedAlbumTitle = null;
+                  _selectedImageIndex = index;
                 });
               },
-              icon: const Icon(Icons.close, color: Color(0xFF625F8C)),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        Expanded(
-          child: ListView(
-            children: album['images']
-                .map<Widget>((imgPath) => Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
+              itemBuilder: (context, i) {
+                final imgPath = album['images'][i];
+                return Column(
+                  children: [
+                    Align(
+                      alignment: Alignment.topRight,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 10, right: 4),
+                        child: GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => EditViewScreen(
+                                  imagePath: imgPath,
+                                  albumName: _selectedAlbumTitle!,
+                                ),
+                              ),
+                            );
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(20),
+                              gradient: const LinearGradient(
+                                colors: [
+                                  Color(0xFFC6DCFF),
+                                  Color(0xFFD2D1FF),
+                                  Color(0xFFF5CFFF),
+                                ],
+                              ),
+                            ),
+                            child: const Text(
+                              "편집하기",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Expanded(
                       child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(20),
                         child: Image.asset(
                           imgPath,
                           width: double.infinity,
-                          height: 180,
                           fit: BoxFit.cover,
                         ),
                       ),
-                    ))
-                .toList(),
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
-        ),
-      ],
-    );
+        ],
+      );
+    }
   }
 }
