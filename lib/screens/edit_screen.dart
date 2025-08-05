@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'edit_view_screen.dart';
+import '../widgets/custom_bottom_nav_bar.dart';
 
 class EditScreen extends StatefulWidget {
   const EditScreen({Key? key}) : super(key: key);
@@ -272,46 +273,11 @@ class _EditScreenState extends State<EditScreen> {
                 const SizedBox(height: 70),
               ],
             ),
-
-            // 하단 탭바
             Positioned(
               bottom: 20,
               left: 20,
               right: 20,
-              child: Container(
-                height: 70,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF6F9FF),
-                  borderRadius: BorderRadius.circular(35),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black12,
-                      blurRadius: 6,
-                      offset: Offset(2, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: List.generate(4, (index) {
-                    return GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _selectedIndex = index;
-                        });
-                      },
-                      child: Image.asset(
-                        _selectedIndex == index
-                            ? _iconPathsOn[index]
-                            : _iconPathsOff[index],
-                        width: index == 2 ? 38 : 36,
-                        height: index == 2 ? 38 : 36,
-                        fit: BoxFit.contain,
-                      ),
-                    );
-                  }),
-                ),
-              ),
+              child: CustomBottomNavBar(selectedIndex: 2),
             ),
           ],
         ),

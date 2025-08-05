@@ -9,30 +9,17 @@ class SharedAlbumScreen extends StatefulWidget {
 }
 
 class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
-  int _selectedIndex = 0;
-
-  final String albumName = 'Shared Album';
-
   String? _selectedAlbumTitle;
-  String? _selectedImagePath;
 
-  final List<String> _imagePaths = [
-    'assets/images/sample3.png',
-    'assets/images/sample4.png',
-  ];
-
-  final List<String> _iconPathsOn = [
-    'assets/icons/image_on.png',
-    'assets/icons/list_on.png',
-    'assets/icons/edit_on.png',
-    'assets/icons/friend_on.png',
-  ];
-
-  final List<String> _iconPathsOff = [
-    'assets/icons/image_off.png',
-    'assets/icons/list_off.png',
-    'assets/icons/edit_off.png',
-    'assets/icons/friend_off.png',
+  final List<Map<String, String>> _albums = [
+    {
+      'title': '공경진',
+      'image': 'assets/images/sample3.png',
+    },
+    {
+      'title': '캡스톤',
+      'image': 'assets/images/sample4.png',
+    },
   ];
 
   @override
@@ -43,7 +30,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
         children: [
           Column(
             children: [
-              // ✅ 상단 사용자 정보
+              // 상단 사용자 정보
               Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: Row(
@@ -64,7 +51,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                 ),
               ),
 
-              // ✅ 가운데 흰 박스 (크기 조정됨)
+              // 가운데 박스
               SizedBox(
                 height: MediaQuery.of(context).size.height - 220,
                 child: Container(
@@ -82,54 +69,90 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
             ],
           ),
 
+          // 하단바
           Positioned(
             bottom: 40,
             left: 20,
             right: 20,
-            child: CustomBottomNavBar(
-              selectedIndex: 0,
-            ), // 현재 화면 index = 0
+            child: CustomBottomNavBar(selectedIndex: 0),
           ),
         ],
       ),
     );
   }
 
-  // ✅ 기본 상태 화면
-  Widget _buildMainAlbumContents() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Shared Album 버튼
-        Container(
-          alignment: Alignment.center,
-          margin: const EdgeInsets.only(bottom: 30),
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(30),
-            gradient: const LinearGradient(
-              colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
-            ),
-          ),
-          child: const Text(
+  // 새 앨범 추가
+  void _addNewAlbum() {
+    setState(() {
+      _albums.add({
+        'title': '새 앨범 ${_albums.length + 1}',
+        'image': 'assets/images/sample3.png',
+      });
+    });
+  }
+
+  // Shared Album 헤더 (왼쪽 정렬 + 오른쪽 +버튼)
+  Widget _buildSharedAlbumHeader() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 30),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(30),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Text(
             'Shared Album',
-            textAlign: TextAlign.center,
             style: TextStyle(
               color: Color(0xFF625F8C),
               fontWeight: FontWeight.bold,
-              fontSize: 20,
+              fontSize: 18,
             ),
           ),
-        ),
-        _buildAlbumCard('공경진', _imagePaths[0]),
-        const SizedBox(height: 16),
-        _buildAlbumCard('캡스톤', _imagePaths[1]),
-      ],
+          GestureDetector(
+            onTap: _addNewAlbum,
+            child: Container(
+              width: 24,
+              height: 24,
+              decoration: const BoxDecoration(
+                color: Color(0xFF625F8C),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.add,
+                color: Colors.white,
+                size: 16,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
-  // ✅ 앨범 선택 시 보여지는 화면
+  // 앨범 리스트 화면
+  Widget _buildMainAlbumContents() {
+    return ListView.builder(
+      itemCount: _albums.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) return _buildSharedAlbumHeader();
+
+        final album = _albums[index - 1];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: _buildAlbumCard(album['title']!, album['image']!),
+        );
+      },
+    );
+  }
+
+  // 앨범 확장 보기
   Widget _buildExpandedAlbumView() {
+    final album = _albums.firstWhere((e) => e['title'] == _selectedAlbumTitle);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -148,7 +171,6 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
               onPressed: () {
                 setState(() {
                   _selectedAlbumTitle = null;
-                  _selectedImagePath = null;
                 });
               },
               icon: const Icon(Icons.close, color: Color(0xFF625F8C)),
@@ -159,7 +181,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
         ClipRRect(
           borderRadius: BorderRadius.circular(12),
           child: Image.asset(
-            _selectedImagePath!,
+            album['image']!,
             width: double.infinity,
             height: 400,
             fit: BoxFit.cover,
@@ -169,13 +191,12 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     );
   }
 
-  // ✅ 앨범 카드 위젯
+  // 앨범 카드
   Widget _buildAlbumCard(String title, String imagePath) {
     return GestureDetector(
       onTap: () {
         setState(() {
           _selectedAlbumTitle = title;
-          _selectedImagePath = imagePath;
         });
       },
       child: Container(
