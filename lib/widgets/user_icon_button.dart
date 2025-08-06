@@ -8,29 +8,78 @@ class UserIconButton extends StatelessWidget {
     showDialog(
       context: context,
       builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('로그아웃'),
-          content: const Text('로그아웃 하시겠습니까?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('취소'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const LoginChoiceScreen(),
+        return Dialog(
+          backgroundColor: const Color(0xFFF6F9FF),
+          shape: RoundedRectangleBorder(
+            side: const BorderSide(color: Color(0xFF625F8C), width: 2),
+            borderRadius: BorderRadius.circular(30),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const Text(
+                  "로그아웃",
+                  style: TextStyle(
+                    fontSize: 20,
+                    color: Color(0xFF625F8C),
+                    fontWeight: FontWeight.bold,
                   ),
-                  (route) => false,
-                );
-              },
-              child: const Text('확인'),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  "로그아웃 하시겠습니까?",
+                  style: TextStyle(fontSize: 16, color: Color(0xFF625F8C)),
+                ),
+                const SizedBox(height: 30),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _buildGradientActionButton("취소", () {
+                      Navigator.pop(context);
+                    }),
+                    _buildGradientActionButton("확인", () {
+                      Navigator.pushAndRemoveUntil(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const LoginChoiceScreen(),
+                        ),
+                        (route) => false,
+                      );
+                    }),
+                  ],
+                ),
+              ],
             ),
-          ],
+          ),
         );
       },
+    );
+  }
+
+  Widget _buildGradientActionButton(String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 100,
+        height: 40,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
     );
   }
 
