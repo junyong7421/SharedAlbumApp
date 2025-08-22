@@ -1,36 +1,25 @@
 import 'package:flutter/material.dart';
+import 'edit_view_screen.dart';
+import 'edit_album_list_screen.dart'; // 🔹 반드시 추가
+import '../widgets/custom_bottom_nav_bar.dart';
+import '../widgets/user_icon_button.dart';
 
 class EditScreen extends StatefulWidget {
-  const EditScreen({Key? key}) : super(key: key);
+  final String albumName;
+
+  const EditScreen({Key? key, required this.albumName}) : super(key: key);
 
   @override
   State<EditScreen> createState() => _EditScreenState();
 }
 
 class _EditScreenState extends State<EditScreen> {
-  int _selectedIndex = 2;
   int _currentIndex = 0;
 
   final List<String> _imagePaths = [
     'assets/images/sample1.jpg',
     'assets/images/sample2.jpg',
   ];
-
-  final List<String> _iconPathsOn = [
-    'assets/icons/image_on.png',
-    'assets/icons/list_on.png',
-    'assets/icons/edit_on.png',
-    'assets/icons/friend_on.png',
-  ];
-
-  final List<String> _iconPathsOff = [
-    'assets/icons/image_off.png',
-    'assets/icons/list_off.png',
-    'assets/icons/edit_off.png',
-    'assets/icons/friend_off.png',
-  ];
-
-  final String albumName = "공경진";
 
   @override
   Widget build(BuildContext context) {
@@ -48,11 +37,7 @@ class _EditScreenState extends State<EditScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Image.asset(
-                        'assets/icons/user.png',
-                        width: 50,
-                        height: 50,
-                      ),
+                      const UserIconButton(),
                       const SizedBox(width: 10),
                       const Text(
                         '편집',
@@ -79,7 +64,7 @@ class _EditScreenState extends State<EditScreen> {
                           ),
                         ),
                         child: Text(
-                          albumName,
+                          widget.albumName,
                           style: const TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
@@ -91,56 +76,131 @@ class _EditScreenState extends State<EditScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 40),
+                const SizedBox(height: 20), // 🔹 간격 줄임
 
-                // ✅ 고양이 사진 + 화살표 분리
+                // ✅ 편집 목록 버튼
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const EditAlbumListScreen(),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(left: 24, bottom: 12),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(16),
+                        gradient: const LinearGradient(
+                          colors: [
+                            Color(0xFFC6DCFF),
+                            Color(0xFFD2D1FF),
+                            Color(0xFFF5CFFF),
+                          ],
+                        ),
+                      ),
+                      child: const Text(
+                        '편집 목록',
+                        style: TextStyle(
+                          color: Color(0xFFF6F9FF),
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // ✅ 편집 중인 사진
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Container(
+                    margin: const EdgeInsets.only(left: 24, bottom: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      gradient: const LinearGradient(
+                        colors: [
+                          Color(0xFFC6DCFF),
+                          Color(0xFFD2D1FF),
+                          Color(0xFFF5CFFF),
+                        ],
+                      ),
+                    ),
+                    child: const Text(
+                      '편집 중인 사진',
+                      style: TextStyle(
+                        color: Color(0xFFF6F9FF),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
+                // ✅ 화살표 + 중앙 사진
                 Center(
                   child: Row(
-                    // 🔹 Row를 밖으로 꺼내고, 가운데 이미지만 감쌈
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      // 🔸 왼쪽 화살표 (밖)
                       IconButton(
                         icon: const Icon(Icons.arrow_left, size: 32),
                         onPressed: () {
                           setState(() {
                             _currentIndex =
                                 (_currentIndex - 1 + _imagePaths.length) %
-                                _imagePaths.length;
+                                    _imagePaths.length;
                           });
                         },
                       ),
-
                       const SizedBox(width: 8),
-
-                      // ✅ 이미지만 흰색 박스로 감쌈
-                      Container(
-                        width: 140,
-                        height: 160,
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Color(0xFFF6F9FF), // ← 이 부분만 박스 처리
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 5,
-                              offset: Offset(2, 2),
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => EditViewScreen(
+                                imagePath: _imagePaths[_currentIndex],
+                                albumName: widget.albumName,
+                              ),
                             ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.asset(
-                            _imagePaths[_currentIndex],
-                            fit: BoxFit.cover,
+                          );
+                        },
+                        child: Container(
+                          width: 140,
+                          height: 160,
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF6F9FF),
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 5,
+                                offset: Offset(2, 2),
+                              ),
+                            ],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.asset(
+                              _imagePaths[_currentIndex],
+                              fit: BoxFit.cover,
+                            ),
                           ),
                         ),
                       ),
-
                       const SizedBox(width: 8),
-
-                      // 🔸 오른쪽 화살표 (밖)
                       IconButton(
                         icon: const Icon(Icons.arrow_right, size: 32),
                         onPressed: () {
@@ -156,11 +216,11 @@ class _EditScreenState extends State<EditScreen> {
 
                 const SizedBox(height: 30),
 
+                // ✅ 편집된 사진
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      // ✅ 왼쪽 정렬된 텍스트 라벨
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Container(
@@ -188,8 +248,7 @@ class _EditScreenState extends State<EditScreen> {
                           ),
                         ),
                       ),
-
-                      // ✅ 중앙 정렬된 흰 박스 + 이미지들
+                      const SizedBox(height: 12),
                       Center(
                         child: Container(
                           width: 300,
@@ -197,7 +256,7 @@ class _EditScreenState extends State<EditScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
+                            boxShadow: const [
                               BoxShadow(
                                 color: Colors.black12,
                                 blurRadius: 4,
@@ -236,45 +295,12 @@ class _EditScreenState extends State<EditScreen> {
               ],
             ),
 
-            // ✅ 하단 커스텀 네비게이션 바
+            // ✅ 하단 네비게이션 바
             Positioned(
               bottom: 20,
               left: 20,
               right: 20,
-              child: Container(
-                height: 70,
-                decoration: BoxDecoration(
-                  color: Color(0xFFF6F9FF),
-                  borderRadius: BorderRadius.circular(35),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black12,
-                      blurRadius: 6,
-                      offset: Offset(2, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: List.generate(4, (index) {
-                    return GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _selectedIndex = index;
-                        });
-                      },
-                      child: Image.asset(
-                        _selectedIndex == index
-                            ? _iconPathsOn[index]
-                            : _iconPathsOff[index],
-                        width: index == 2 ? 38 : 36,
-                        height: index == 2 ? 38 : 36,
-                        fit: BoxFit.contain,
-                      ),
-                    );
-                  }),
-                ),
-              ),
+              child: CustomBottomNavBar(selectedIndex: 2),
             ),
           ],
         ),
