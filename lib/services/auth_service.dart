@@ -1,37 +1,34 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:firebase_database/firebase_database.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseDatabase _db = FirebaseDatabase.instance;
+  final FirebaseFirestore _fs = FirebaseFirestore.instance;
 
-  /// 구글 로그인 수행 + 사용자 DB에 자동 등록
+  /// 구글 로그인 + Firestore에 사용자 프로필 upsert
   Future<User?> signInWithGoogle() async {
     try {
-      // 1. 구글 계정 선택
+      // 1) 구글 계정 선택
       final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
       if (googleUser == null) return null;
 
-      // 2. 인증 정보 가져오기
-      final GoogleSignInAuthentication googleAuth =
-          await googleUser.authentication;
+      // 2) 인증 토큰
+      final googleAuth = await googleUser.authentication;
 
-      // 3. Firebase 인증 자격 생성
+      // 3) Firebase 자격
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,
         idToken: googleAuth.idToken,
       );
 
-      // 4. Firebase 로그인
-      final UserCredential userCredential = await _auth.signInWithCredential(
-        credential,
-      );
+      // 4) 로그인
+      final userCredential = await _auth.signInWithCredential(credential);
       final user = userCredential.user;
       if (user == null) return null;
 
-      // 5. 사용자 정보 DB에 저장
-      await _saveUserToDatabase(user);
+      // 5) Firestore에 사용자 프로필 저장(업서트)
+      await _saveUserToFirestore(user);
 
       return user;
     } catch (e) {
@@ -40,21 +37,19 @@ class AuthService {
     }
   }
 
-  /// 사용자 정보를 Realtime Database에 저장
-  Future<void> _saveUserToDatabase(User user) async {
-    final ref = _db.ref("users/${user.uid}");
-    final snapshot = await ref.get();
+  /// Firestore: users/{uid} 문서에 upsert (서버 시간 사용)
+  Future<void> _saveUserToFirestore(User user) async {
+    final doc = _fs.collection('users').doc(user.uid);
 
-    if (!snapshot.exists) {
-      // DB에 사용자 정보가 없는 경우만 저장
-      await ref.set({
-        "uid": user.uid,
-        "email": user.email,
-        "name": user.displayName,
-        "photoUrl": user.photoURL,
-        "loginMethod": "google",
-        "createdAt": DateTime.now().toIso8601String(),
-      });
-    }
+    // 이미 존재하면 merge, 없으면 생성
+    await doc.set({
+      'uid': user.uid,
+      'email': user.email,
+      'name': user.displayName,
+      'photoUrl': user.photoURL,
+      'loginMethod': 'google',
+      'createdAt': FieldValue.serverTimestamp(), // 서버 시간
+      'updatedAt': FieldValue.serverTimestamp(), // 선택: 업데이트 시간
+    }, SetOptions(merge: true));
   }
 }
