@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/shared_album_list_service.dart';
 
+// 만약 하단 커스텀 네비바를 쓰고 싶으면 주석 해제!
+import '../widgets/custom_bottom_nav_bar.dart';
+
 class SharedAlbumListScreen extends StatefulWidget {
   const SharedAlbumListScreen({super.key});
 
@@ -16,170 +19,174 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
+
+      // 하단 네비게이션바 쓰는 경우 주석 해제
+      bottomNavigationBar: const Padding(
+        padding: EdgeInsets.only(bottom: 20, left: 20, right: 20),
+        child: CustomBottomNavBar(selectedIndex: 1),
+      ),
+
       body: SafeArea(
-        child: Stack(
+        child: Column(
           children: [
-            Column(
-              children: [
-                // 상단 사용자 정보
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      _buildUserAvatar(),
-                      const SizedBox(width: 10),
-                      const Text(
-                        '공유앨범 목록 및 멤버관리',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+            // 헤더
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  _buildUserAvatar(),
+                  const SizedBox(width: 10),
+                  const Text(
+                    '공유앨범 목록 및 멤버관리',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF625F8C),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // 앨범 목록
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF6F9FF),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: StreamBuilder<List<SharedAlbumListItem>>(
+                  stream: _svc.watchMySharedAlbums(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(
                           color: Color(0xFF625F8C),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
+                      );
+                    }
 
-                // 공유 앨범 리스트
-                Expanded(
-                  child: StreamBuilder<List<SharedAlbumListItem>>(
-                    stream: _svc.watchMySharedAlbums(),
-                    builder: (context, snapshot) {
-                      final items = snapshot.data ?? [];
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Center(
-                          child: CircularProgressIndicator(
+                    final items = snapshot.data ?? [];
+                    if (items.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          '참여 중인 공유앨범이 없습니다',
+                          style: TextStyle(
                             color: Color(0xFF625F8C),
+                            fontSize: 16,
                           ),
-                        );
-                      }
-                      if (items.isEmpty) {
-                        return const Center(
-                          child: Text(
-                            '참여 중인 공유앨범이 없습니다',
-                            style: TextStyle(
-                              color: Color(0xFF625F8C),
-                              fontSize: 16,
-                            ),
-                          ),
-                        );
-                      }
+                        ),
+                      );
+                    }
 
-                      return SingleChildScrollView(
-                        padding: const EdgeInsets.only(bottom: 90),
-                        child: Column(
-                          children: List.generate(items.length, (index) {
-                            final album = items[index];
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 10,
+                    return ListView.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final album = items[index];
+                        return Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 16,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Image.asset(
+                                'assets/icons/shared_album_list.png',
+                                width: 50,
+                                height: 50,
                               ),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF6F9FF),
-                                  borderRadius: BorderRadius.circular(24),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 16,
-                                ),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.center,
+                              const SizedBox(width: 16),
+
+                              // 텍스트 영역
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Image.asset(
-                                      'assets/icons/shared_album_list.png',
-                                      width: 50,
-                                      height: 50,
-                                    ),
-                                    const SizedBox(width: 16),
-                                    // 텍스트 영역
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Flexible(
-                                                child: Text(
-                                                  album.name,
-                                                  style: const TextStyle(
-                                                    fontSize: 16,
-                                                    fontWeight: FontWeight.w600,
-                                                    color: Color(0xFF625F8C),
-                                                  ),
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              _chip('${album.memberCount}명'),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            '사진 ${album.photoCount}장',
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            album.name,
                                             style: const TextStyle(
-                                              fontSize: 13,
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.w600,
                                               color: Color(0xFF625F8C),
                                             ),
+                                            overflow: TextOverflow.ellipsis,
                                           ),
-                                        ],
-                                      ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        _chip('${album.memberCount}명'),
+                                      ],
                                     ),
-
-                                    // 버튼들
-                                    const SizedBox(width: 8),
-                                    _pillButton(
-                                      label: '멤버추가',
-                                      onTap: () => _onAddMembers(
-                                        album.id,
-                                        album.memberUids,
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '사진 ${album.photoCount}장',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Color(0xFF625F8C),
                                       ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    _pillButton(
-                                      label: '상세정보',
-                                      onTap: () => _showMemberDetails(album.id),
                                     ),
                                   ],
                                 ),
                               ),
-                            );
-                          }),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
 
-            // (원래 코드의 커스텀 네비바가 있다면 여기에 배치)
+                              const SizedBox(width: 8),
+
+                              // 버튼들
+                              _pillButton(
+                                label: '멤버추가',
+                                onTap: () =>
+                                    _onAddMembers(album.id, album.memberUids),
+                              ),
+                              const SizedBox(width: 6),
+                              _pillButton(
+                                label: '상세정보',
+                                onTap: () => _showMemberDetails(album.id),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
+  // 아바타
   Widget _buildUserAvatar() {
     final user = FirebaseAuth.instance.currentUser;
     final photo = user?.photoURL;
     return CircleAvatar(
-      radius: 25,
+      radius: 24,
       backgroundImage: (photo != null && photo.isNotEmpty)
           ? NetworkImage(photo)
           : null,
+      backgroundColor: const Color(0xFFD9E2FF),
       child: (photo == null || photo.isEmpty)
           ? const Icon(Icons.person, color: Color(0xFF625F8C))
           : null,
-      backgroundColor: const Color(0xFFD9E2FF),
     );
   }
 
+  // 작은 칩
   Widget _chip(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -194,6 +201,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
     );
   }
 
+  // 알약 버튼
   Widget _pillButton({required String label, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
@@ -221,97 +229,141 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
     String albumId,
     List<String> existingMemberUids,
   ) async {
-    final friends = await _svc.fetchMyFriends();
-    if (!mounted) return;
+    try {
+      final friends = await _svc.fetchMyFriends();
+      if (!mounted) return;
 
-    final selected = await showModalBottomSheet<List<String>>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => _FriendPickerSheet(
-        friends: friends,
-        alreadyMembers: existingMemberUids,
-      ),
-    );
+      final selected = await showModalBottomSheet<List<String>>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.white,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        builder: (_) => _FriendPickerSheet(
+          friends: friends,
+          alreadyMembers: existingMemberUids,
+        ),
+      );
 
-    if (selected != null && selected.isNotEmpty) {
-      await _svc.addMembers(albumId, selected);
+      if (selected != null && selected.isNotEmpty) {
+        await _svc.addMembers(albumId, selected);
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('멤버가 추가되었습니다.')));
+      }
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('멤버가 추가되었습니다.')));
+      ).showSnackBar(SnackBar(content: Text('추가 실패: $e')));
     }
   }
 
   /// 상세정보: 앨범 멤버 목록을 다이얼로그로 표시
   Future<void> _showMemberDetails(String albumId) async {
-    final members = await _svc.fetchAlbumMembers(albumId);
-    if (!mounted) return;
+    try {
+      final members = await _svc.fetchAlbumMembers(albumId);
+      if (!mounted) return;
 
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: const Color(0xFFF6F9FF),
-        shape: RoundedRectangleBorder(
-          side: const BorderSide(color: Color(0xFF625F8C), width: 3),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          constraints: const BoxConstraints(maxHeight: 480, minWidth: 280),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                '멤버 목록',
-                style: TextStyle(
-                  color: Color(0xFF625F8C),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
+      showDialog(
+        context: context,
+        builder: (_) => Dialog(
+          backgroundColor: const Color(0xFFF6F9FF),
+          shape: RoundedRectangleBorder(
+            side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            constraints: const BoxConstraints(maxHeight: 480, minWidth: 280),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  '멤버 목록',
+                  style: TextStyle(
+                    color: Color(0xFF625F8C),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: ListView.separated(
-                  itemCount: members.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final m = members[i];
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundImage:
-                            (m.photoUrl != null && m.photoUrl!.isNotEmpty)
-                            ? NetworkImage(m.photoUrl!)
+                const SizedBox(height: 12),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: members.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final m = members[i];
+                      return ListTile(
+                        leading: CircleAvatar(
+                          backgroundImage:
+                              (m.photoUrl != null && m.photoUrl!.isNotEmpty)
+                              ? NetworkImage(m.photoUrl!)
+                              : null,
+                          backgroundColor: const Color(0xFFD9E2FF),
+                          child: (m.photoUrl == null || m.photoUrl!.isEmpty)
+                              ? const Icon(
+                                  Icons.person,
+                                  color: Color(0xFF625F8C),
+                                )
+                              : null,
+                        ),
+                        title: Text(
+                          m.name.isNotEmpty ? m.name : m.email,
+                          style: const TextStyle(color: Color(0xFF625F8C)),
+                        ),
+                        subtitle: m.name.isNotEmpty
+                            ? Text(
+                                m.email,
+                                style: const TextStyle(
+                                  color: Color(0xFF625F8C),
+                                ),
+                              )
                             : null,
-                        child: (m.photoUrl == null || m.photoUrl!.isEmpty)
-                            ? const Icon(Icons.person, color: Color(0xFF625F8C))
-                            : null,
-                        backgroundColor: const Color(0xFFD9E2FF),
-                      ),
-                      title: Text(
-                        m.name.isNotEmpty ? m.name : m.email,
-                        style: const TextStyle(color: Color(0xFF625F8C)),
-                      ),
-                      subtitle: m.name.isNotEmpty
-                          ? Text(
-                              m.email,
-                              style: const TextStyle(color: Color(0xFF625F8C)),
-                            )
-                          : null,
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              _pillButton(label: '닫기', onTap: () => Navigator.pop(context)),
-            ],
+                const SizedBox(height: 8),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(20),
+                      gradient: const LinearGradient(
+                        colors: [
+                          Color(0xFFC6DCFF),
+                          Color(0xFFD2D1FF),
+                          Color(0xFFF5CFFF),
+                        ],
+                      ),
+                    ),
+                    child: const Text(
+                      '닫기',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('불러오기 실패: $e')));
+    }
   }
 }
 
@@ -362,6 +414,7 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
           ),
           const SizedBox(height: 8),
+
           Flexible(
             child: notMembers.isEmpty
                 ? const Padding(
@@ -401,6 +454,7 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
                   ),
           ),
           const SizedBox(height: 8),
+
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [

@@ -4,8 +4,8 @@ import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import 'edit_view_screen.dart';
 
-// 서비스 + 모델
-import '../services/shared_album_service.dart'; // 앞서 만든 서비스 파일(Album, Photo 모델 포함)
+// 서비스 + 모델 (Album, Photo 포함)
+import '../services/shared_album_service.dart';
 
 class SharedAlbumScreen extends StatefulWidget {
   const SharedAlbumScreen({super.key});
@@ -19,7 +19,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
   final _albumNameController = TextEditingController();
 
   String? _selectedAlbumId; // 상세 진입 시 사용
-  String? _selectedAlbumTitle; // 리네임 다이얼로그 기본값으로 사용
+  String? _selectedAlbumTitle; // 상세 상단/리네임 다이얼로그 기본값
   int? _selectedImageIndex;
 
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
@@ -36,7 +36,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     _albumNameController.clear();
     showDialog(
       context: context,
-      builder: (BuildContext context) {
+      builder: (_) {
         return Dialog(
           backgroundColor: const Color(0xFFF6F9FF),
           shape: RoundedRectangleBorder(
@@ -62,7 +62,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                 const SizedBox(height: 20),
                 TextField(
                   controller: _albumNameController,
-                  cursorColor: Color(0xFF625F8C),
+                  cursorColor: const Color(0xFF625F8C),
                   style: const TextStyle(color: Color(0xFF625F8C)),
                   decoration: InputDecoration(
                     hintText: "앨범 이름을 입력하세요.",
@@ -80,22 +80,14 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                     ),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 20),
                   ),
+                  onSubmitted: (_) => _onCreateAlbum(),
                 ),
-                const SizedBox(height: 30),
+                const SizedBox(height: 24),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    _buildGradientActionButton(
-                      "취소",
-                      () => Navigator.pop(context),
-                    ),
-                    _buildGradientActionButton("확인", () async {
-                      final name = _albumNameController.text.trim();
-                      if (name.isNotEmpty) {
-                        await _svc.createAlbum(uid: _uid, title: name);
-                      }
-                      if (mounted) Navigator.pop(context);
-                    }),
+                    _pillButton("취소", () => Navigator.pop(context)),
+                    _pillButton("확인", _onCreateAlbum),
                   ],
                 ),
               ],
@@ -106,12 +98,29 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     );
   }
 
+  Future<void> _onCreateAlbum() async {
+    final name = _albumNameController.text.trim();
+    if (name.isEmpty) return;
+    try {
+      await _svc.createAlbum(uid: _uid, title: name);
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('앨범이 생성되었습니다.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('생성 실패: $e')));
+    }
+  }
+
   void _showRenameAlbumDialog({
     required String albumId,
     required String currentTitle,
   }) {
     final controller = TextEditingController(text: currentTitle);
-
     showDialog(
       context: context,
       builder: (_) {
@@ -163,24 +172,31 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    _buildGradientActionButton(
-                      "취소",
-                      () => Navigator.pop(context),
-                    ),
-                    _buildGradientActionButton("변경", () async {
+                    _pillButton("취소", () => Navigator.pop(context)),
+                    _pillButton("변경", () async {
                       final newName = controller.text.trim();
-                      if (newName.isNotEmpty && newName != currentTitle) {
+                      if (newName.isEmpty || newName == currentTitle) {
+                        Navigator.pop(context);
+                        return;
+                      }
+                      try {
                         await _svc.renameAlbum(
                           uid: _uid,
                           albumId: albumId,
                           newTitle: newName,
                         );
-                        // 상세 화면에서 이름을 보여줄 경우 state도 갱신
-                        if (_selectedAlbumId == albumId) {
-                          setState(() => _selectedAlbumTitle = newName);
-                        }
+                        if (!mounted) return;
+                        setState(() => _selectedAlbumTitle = newName);
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('앨범명이 변경되었습니다.')),
+                        );
+                      } catch (e) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text('변경 실패: $e')));
                       }
-                      if (mounted) Navigator.pop(context);
                     }),
                   ],
                 ),
@@ -192,47 +208,43 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     );
   }
 
-  Widget _buildGradientActionButton(String label, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 100,
-        height: 40,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: const LinearGradient(
-            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
-          ),
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          label,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
-    );
-  }
+  // ---------------------- Actions ----------------------
 
   Future<void> _addPhotos(String albumId) async {
-    await _svc.addPhotosFromGallery(
-      uid: _uid,
-      albumId: albumId,
-      allowMultiple: true,
-    );
+    try {
+      await _svc.addPhotosFromGallery(
+        uid: _uid,
+        albumId: albumId,
+        allowMultiple: true,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('업로드 실패: $e')));
+    }
   }
 
   Future<void> _deleteAlbum(String albumId) async {
-    await _svc.deleteAlbum(uid: _uid, albumId: albumId);
-    setState(() {
-      if (_selectedAlbumId == albumId) {
-        _selectedAlbumId = null;
-        _selectedAlbumTitle = null;
-        _selectedImageIndex = null;
-      }
-    });
+    try {
+      await _svc.deleteAlbum(uid: _uid, albumId: albumId);
+      if (!mounted) return;
+      setState(() {
+        if (_selectedAlbumId == albumId) {
+          _selectedAlbumId = null;
+          _selectedAlbumTitle = null;
+          _selectedImageIndex = null;
+        }
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('앨범이 삭제되었습니다.')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
+    }
   }
 
   // ---------------------- Build ----------------------
@@ -338,14 +350,31 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
   Widget _buildMainAlbumList() {
     return StreamBuilder<List<Album>>(
-      stream: _svc.watchAlbums(_uid),
-      builder: (context, snapshot) {
-        final albums = snapshot.data ?? [];
-        if (snapshot.connectionState == ConnectionState.waiting) {
+      stream: _svc.watchAlbums(
+        _uid,
+      ), // memberUids array-contains + updatedAt desc
+      builder: (context, snap) {
+        // 에러 표시 (인덱스/권한 문제 진단)
+        if (snap.hasError) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                '에러: ${snap.error}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xFF625F8C)),
+              ),
+            ),
+          );
+        }
+
+        if (snap.connectionState == ConnectionState.waiting) {
           return const Center(
             child: CircularProgressIndicator(color: Color(0xFF625F8C)),
           );
         }
+
+        final albums = snap.data ?? [];
         if (albums.isEmpty) {
           return const Center(
             child: Text(
@@ -365,7 +394,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                 onTap: () {
                   setState(() {
                     _selectedAlbumId = album.id;
-                    _selectedAlbumTitle = album.title; // 상세에서 리네임 기본값으로 사용
+                    _selectedAlbumTitle = album.title;
                     _selectedImageIndex = null;
                   });
                 },
@@ -391,7 +420,6 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          // 사진 추가
                           IconButton(
                             icon: const Icon(
                               Icons.add_photo_alternate,
@@ -400,7 +428,6 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                             tooltip: '사진 추가',
                             onPressed: () => _addPhotos(album.id),
                           ),
-                          // 이름 변경
                           IconButton(
                             icon: const Icon(
                               Icons.edit,
@@ -412,7 +439,6 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                               currentTitle: album.title,
                             ),
                           ),
-                          // 삭제
                           IconButton(
                             icon: const Icon(
                               Icons.delete,
@@ -422,7 +448,8 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                           ),
                         ],
                       ),
-                      if (album.coverPhotoUrl != null)
+                      if (album.coverPhotoUrl != null &&
+                          album.coverPhotoUrl!.isNotEmpty)
                         ClipRRect(
                           borderRadius: BorderRadius.circular(12),
                           child: Image.network(
@@ -430,6 +457,14 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                             width: double.infinity,
                             height: 180,
                             fit: BoxFit.cover,
+                          ),
+                        )
+                      else
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                          child: Text(
+                            '사진 ${album.photoCount}장',
+                            style: const TextStyle(color: Color(0xFF625F8C)),
                           ),
                         ),
                     ],
@@ -447,6 +482,8 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
   Widget _buildExpandedAlbumView() {
     final albumId = _selectedAlbumId!;
+    final title = _selectedAlbumTitle ?? '앨범';
+
     return Column(
       children: [
         Row(
@@ -461,15 +498,23 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                 });
               },
             ),
-            const Spacer(),
-            // (선택) 상세에서도 이름 변경 지원
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF625F8C),
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             IconButton(
               icon: const Icon(Icons.edit, color: Color(0xFF625F8C)),
               tooltip: '이름 변경',
-              onPressed: () => _showRenameAlbumDialog(
-                albumId: albumId,
-                currentTitle: _selectedAlbumTitle ?? '앨범',
-              ),
+              onPressed: () =>
+                  _showRenameAlbumDialog(albumId: albumId, currentTitle: title),
             ),
             IconButton(
               icon: const Icon(
@@ -482,16 +527,32 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
           ],
         ),
         const SizedBox(height: 8),
+
         Expanded(
           child: StreamBuilder<List<Photo>>(
             stream: _svc.watchPhotos(uid: _uid, albumId: albumId),
-            builder: (context, snapshot) {
-              final photos = snapshot.data ?? [];
-              if (snapshot.connectionState == ConnectionState.waiting) {
+            builder: (context, snap) {
+              if (snap.hasError) {
+                final uid = FirebaseAuth.instance.currentUser?.uid;
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      '에러: ${snap.error}\nuid: $uid',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Color(0xFF625F8C)),
+                    ),
+                  ),
+                );
+              }
+
+              if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(
                   child: CircularProgressIndicator(color: Color(0xFF625F8C)),
                 );
               }
+
+              final photos = snap.data ?? [];
               if (photos.isEmpty) {
                 return const Center(
                   child: Text(
@@ -548,25 +609,33 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => EditViewScreen(
-                                          imagePath: p.url, // URL
-                                          albumName:
-                                              albumId, // 필요 시 실제 이름으로 변경 가능
+                                          imagePath: p.url,
+                                          albumName: albumId, // 필요 시 실제 이름으로 변경
                                         ),
                                       ),
                                     );
                                   },
-                                  child: _pillButton("편집하기"),
+                                  child: _pill("편집하기"),
                                 ),
                                 const SizedBox(width: 8),
                                 GestureDetector(
                                   onTap: () async {
-                                    await _svc.deletePhoto(
-                                      uid: _uid,
-                                      albumId: albumId,
-                                      photoId: p.id,
-                                    );
+                                    try {
+                                      await _svc.deletePhoto(
+                                        uid: _uid,
+                                        albumId: albumId,
+                                        photoId: p.id,
+                                      );
+                                    } catch (e) {
+                                      if (!mounted) return;
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(content: Text('삭제 실패: $e')),
+                                      );
+                                    }
                                   },
-                                  child: _pillButton("삭제"),
+                                  child: _pill("삭제"),
                                 ),
                               ],
                             ),
@@ -594,7 +663,33 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     );
   }
 
-  Widget _pillButton(String text) {
+  // ---------------------- Small UI helpers ----------------------
+
+  Widget _pillButton(String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 100,
+        height: 40,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _pill(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: BoxDecoration(

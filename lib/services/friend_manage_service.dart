@@ -8,13 +8,16 @@ class FriendManageService {
   final _fs = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
 
-  /// 내 친구 목록 실시간 구독 (현재 로그인 사용자 기준)
+  User? get currentUser => _auth.currentUser;
+
+  /// 내 친구 목록 실시간 구독
+  /// - 작성 시각이 최근인 친구가 위로 오도록 정렬
   Stream<List<FriendUser>> watchFriends() {
     final me = _auth.currentUser;
     if (me == null) {
-      // 로그인 전이면 빈 스트림
       return const Stream<List<FriendUser>>.empty();
     }
+
     final col = _fs
         .collection('users')
         .doc(me.uid)
@@ -26,33 +29,34 @@ class FriendManageService {
     });
   }
 
-  /// 이메일로 친구 추가(양방향) - 현재 로그인 사용자 기준
-  Future<AddFriendResult> addFriendByEmail(String emailRaw) async {
+  /// 이메일로 친구 추가 (양방향, idempotent)
+  Future<AddFriendResult> addFriendByEmail(String rawEmail) async {
     final me = _auth.currentUser;
     if (me == null) return AddFriendResult.fail('로그인이 필요합니다.');
 
-    final email = emailRaw.trim().toLowerCase();
+    final email = normalizeEmail(rawEmail);
     if (email.isEmpty) return AddFriendResult.fail('이메일을 입력해 주세요.');
 
-    // 1) users에서 이메일로 사용자 찾기
-    final q = await _fs
-        .collection('users')
-        .where('email', isEqualTo: email)
-        .limit(1)
-        .get();
-
-    if (q.docs.isEmpty) {
+    // 1) 사용자 조회 (emailLower 우선 → fallback: email)
+    final target = await getUserByEmail(email);
+    if (target == null) {
       return AddFriendResult.fail('해당 이메일의 사용자를 찾을 수 없어요.');
     }
 
-    final friendDoc = q.docs.first;
-    final friendUid = friendDoc.id;
+    final friendUid = target.id;
+    final friendData = target.data()!;
 
     if (friendUid == me.uid) {
       return AddFriendResult.fail('자기 자신은 친구로 추가할 수 없어요.');
     }
 
-    final friendData = friendDoc.data();
+    // 2) 이미 친구인지 확인 (idempotent)
+    final already = await isAlreadyFriend(me.uid, friendUid);
+    if (already) {
+      return AddFriendResult.ok('이미 친구예요.');
+    }
+
+    // 3) 메타 구성
     final friendMeta = {
       'uid': friendUid,
       'email': (friendData['email'] ?? '').toString(),
@@ -80,13 +84,7 @@ class FriendManageService {
         .collection('friends')
         .doc(me.uid);
 
-    // 이미 친구인지 확인
-    final already = await myFriendRef.get();
-    if (already.exists) {
-      return AddFriendResult.ok('이미 친구예요.');
-    }
-
-    // 2) 양방향 기록 (트랜잭션)
+    // 4) 트랜잭션으로 양방향 쓰기
     await _fs.runTransaction((tx) async {
       tx.set(myFriendRef, friendMeta, SetOptions(merge: true));
       tx.set(otherFriendRef, myMeta, SetOptions(merge: true));
@@ -116,9 +114,53 @@ class FriendManageService {
       tx.delete(otherRef);
     });
   }
+
+  // -------------------- 유틸 --------------------
+
+  /// users 컬렉션에서 이메일로 사용자 문서를 찾는다.
+  /// - emailLower 필드가 있는 경우 대소문자 구애 없이 빠르게 검색
+  /// - 없다면 fallback 으로 email == 원본소문자 비교(케이스 맞는 데이터여야 히트)
+  Future<DocumentSnapshot<Map<String, dynamic>>?> getUserByEmail(
+    String normalizedEmail,
+  ) async {
+    // emailLower 우선
+    final q1 = await _fs
+        .collection('users')
+        .where('emailLower', isEqualTo: normalizedEmail)
+        .limit(1)
+        .get();
+
+    if (q1.docs.isNotEmpty) return q1.docs.first;
+
+    // fallback: email (기존 데이터 호환)
+    final q2 = await _fs
+        .collection('users')
+        .where('email', isEqualTo: normalizedEmail)
+        .limit(1)
+        .get();
+
+    if (q2.docs.isNotEmpty) return q2.docs.first;
+
+    return null;
+  }
+
+  /// 이미 친구인지 확인
+  Future<bool> isAlreadyFriend(String myUid, String friendUid) async {
+    final ref = _fs
+        .collection('users')
+        .doc(myUid)
+        .collection('friends')
+        .doc(friendUid);
+    final snap = await ref.get();
+    return snap.exists;
+  }
+
+  /// 이메일 정규화 (좌우 공백 제거 + 소문자)
+  String normalizeEmail(String raw) => raw.trim().toLowerCase();
 }
 
 // ===== 모델 =====
+
 class FriendUser {
   final String uid;
   final String? email;
