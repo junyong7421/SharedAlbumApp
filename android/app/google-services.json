@@ -15,6 +15,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "358024473338-205cneh70gkmcvanr4jkoqnfpp10a50u.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.sharedalbumapp",
+            "certificate_hash": "f7d4b962399a7fa77fa33e2359be01e2249aa572"
+          }
+        },
+        {
           "client_id": "358024473338-g8shgo8vjoblll9v3mj80l7tkkqlvg5u.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
