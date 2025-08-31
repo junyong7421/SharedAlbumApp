@@ -45,6 +45,23 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       color: Color(0xFF625F8C),
                     ),
                   ),
+
+                  // 오른쪽 정렬
+                  const Spacer(),
+
+                  // ✅ 배경 제거 + 아이콘을 살짝 왼쪽으로
+                  GestureDetector(
+                    onTap: () {
+                      // TODO: 눌렀을 때 동작 필요하면 여기에 추가
+                    },
+                    child: Image.asset(
+                      'assets/icons/call_off.png',
+                      width: 50,
+                      height: 50,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  const SizedBox(width: 12), // ← 아이콘을 오른쪽 가장자리에서 살짝 왼쪽으로
                 ],
               ),
             ),
