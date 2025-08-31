@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/shared_album_list_service.dart';
 
+// 팝업 유틸 (앨범 선택 / 접속자 목록)
+import 'voice_call_popup.dart';
+
 // 만약 하단 커스텀 네비바를 쓰고 싶으면 주석 해제!
 import '../widgets/custom_bottom_nav_bar.dart';
 
@@ -49,10 +52,58 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                   // 오른쪽 정렬
                   const Spacer(),
 
-                  // ✅ 배경 제거 + 아이콘을 살짝 왼쪽으로
+                  // 전화 아이콘: 앨범 선택 → 보이스톡 접속자 팝업
                   GestureDetector(
-                    onTap: () {
-                      // TODO: 눌렀을 때 동작 필요하면 여기에 추가
+                    onTap: () async {
+                      try {
+                        final me = FirebaseAuth.instance.currentUser;
+                        if (me == null) return;
+
+                        // 1) 앨범 목록 로드 및 팝업
+                        final albums = await _svc.watchMySharedAlbums().first;
+                        final albumLites = albums
+                            .map((a) => AlbumLite(id: a.id, name: a.name))
+                            .toList();
+
+                        final selectedAlbumId = await showAlbumSelectPopup(
+                          context,
+                          albums: albumLites,
+                        );
+                        if (selectedAlbumId == null) return;
+
+                        final selectedAlbum = albumLites
+                            .firstWhere((e) => e.id == selectedAlbumId);
+
+                        // 2) 입장 처리 (이후 목록에 '나' 포함)
+                        await _svc.joinVoice(albumId: selectedAlbumId);
+
+                        // 3) 실시간 접속자 스트림 준비
+                        final stream = _svc.watchVoiceParticipants(selectedAlbumId)
+                            .map((list) => list
+                                .map((m) => MemberLite(
+                                      uid: m.uid,
+                                      name: m.name.isNotEmpty ? m.name : m.email,
+                                    ))
+                                .toList());
+
+                        final initial = await stream.first;
+
+                        // 4) 현재 보이스톡 접속자 팝업 (선택형 아님)
+                        await showVoiceNowPopup(
+                          context,
+                          albumName: selectedAlbum.name,
+                          initialParticipants: initial,
+                          participantsStream: stream,
+                          onLeave: () async {
+                            await _svc.leaveVoice(albumId: selectedAlbumId);
+                          },
+                        );
+                      } catch (e) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('보이스톡 진입 실패: $e')),
+                        );
+                      }
                     },
                     child: Image.asset(
                       'assets/icons/call_off.png',
@@ -61,7 +112,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       fit: BoxFit.contain,
                     ),
                   ),
-                  const SizedBox(width: 12), // ← 아이콘을 오른쪽 가장자리에서 살짝 왼쪽으로
+                  const SizedBox(width: 12), // 아이콘을 오른쪽 가장자리에서 살짝 왼쪽으로
                 ],
               ),
             ),
@@ -164,8 +215,10 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                               // 버튼들
                               _pillButton(
                                 label: '멤버추가',
-                                onTap: () =>
-                                    _onAddMembers(album.id, album.memberUids),
+                                onTap: () => _onAddMembers(
+                                  album.id,
+                                  album.memberUids,
+                                ),
                               ),
                               const SizedBox(width: 6),
                               _pillButton(
@@ -193,9 +246,8 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
     final photo = user?.photoURL;
     return CircleAvatar(
       radius: 24,
-      backgroundImage: (photo != null && photo.isNotEmpty)
-          ? NetworkImage(photo)
-          : null,
+      backgroundImage:
+          (photo != null && photo.isNotEmpty) ? NetworkImage(photo) : null,
       backgroundColor: const Color(0xFFD9E2FF),
       child: (photo == null || photo.isEmpty)
           ? const Icon(Icons.person, color: Color(0xFF625F8C))
@@ -266,15 +318,15 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       if (selected != null && selected.isNotEmpty) {
         await _svc.addMembers(albumId, selected);
         if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('멤버가 추가되었습니다.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('멤버가 추가되었습니다.')),
+        );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('추가 실패: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('추가 실패: $e')),
+      );
     }
   }
 
@@ -315,16 +367,14 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       final m = members[i];
                       return ListTile(
                         leading: CircleAvatar(
-                          backgroundImage:
-                              (m.photoUrl != null && m.photoUrl!.isNotEmpty)
+                          backgroundImage: (m.photoUrl != null &&
+                                  m.photoUrl!.isNotEmpty)
                               ? NetworkImage(m.photoUrl!)
                               : null,
                           backgroundColor: const Color(0xFFD9E2FF),
                           child: (m.photoUrl == null || m.photoUrl!.isEmpty)
-                              ? const Icon(
-                                  Icons.person,
-                                  color: Color(0xFF625F8C),
-                                )
+                              ? const Icon(Icons.person,
+                                  color: Color(0xFF625F8C))
                               : null,
                         ),
                         title: Text(
@@ -334,9 +384,8 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                         subtitle: m.name.isNotEmpty
                             ? Text(
                                 m.email,
-                                style: const TextStyle(
-                                  color: Color(0xFF625F8C),
-                                ),
+                                style:
+                                    const TextStyle(color: Color(0xFF625F8C)),
                               )
                             : null,
                       );
@@ -377,9 +426,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('불러오기 실패: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('불러오기 실패: $e')),
+      );
     }
   }
 }
@@ -458,8 +507,8 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
                         title: Text(f.name.isNotEmpty ? f.name : f.email),
                         subtitle: f.name.isNotEmpty ? Text(f.email) : null,
                         secondary: CircleAvatar(
-                          backgroundImage:
-                              (f.photoUrl != null && f.photoUrl!.isNotEmpty)
+                          backgroundImage: (f.photoUrl != null &&
+                                  f.photoUrl!.isNotEmpty)
                               ? NetworkImage(f.photoUrl!)
                               : null,
                           child: (f.photoUrl == null || f.photoUrl!.isEmpty)
