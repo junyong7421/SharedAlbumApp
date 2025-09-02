@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/shared_album_list_service.dart';
 
-// 팝업 유틸 (앨범 선택 / 접속자 목록)
+// 팝업 / 오버레이
 import 'voice_call_popup.dart';
+import 'voice_call_overlay.dart';
 
-// 만약 하단 커스텀 네비바를 쓰고 싶으면 주석 해제!
+// 하단 커스텀 네비바
 import '../widgets/custom_bottom_nav_bar.dart';
 
 class SharedAlbumListScreen extends StatefulWidget {
@@ -23,7 +24,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
 
-      // 하단 네비게이션바 쓰는 경우 주석 해제
+      // 하단 네비게이션바
       bottomNavigationBar: const Padding(
         padding: EdgeInsets.only(bottom: 20, left: 20, right: 20),
         child: CustomBottomNavBar(selectedIndex: 1),
@@ -48,10 +49,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       color: Color(0xFF625F8C),
                     ),
                   ),
-
                   const Spacer(),
 
-                  // 전화 아이콘
+                  // 전화 아이콘 (접속 중이면 팝업/오버레이, 아니면 앨범 선택 → 입장)
                   GestureDetector(
                     onTap: _onTapCall,
                     child: Image.asset(
@@ -164,10 +164,8 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                               // 버튼들
                               _pillButton(
                                 label: '멤버추가',
-                                onTap: () => _onAddMembers(
-                                  album.id,
-                                  album.memberUids,
-                                ),
+                                onTap: () =>
+                                    _onAddMembers(album.id, album.memberUids),
                               ),
                               const SizedBox(width: 6),
                               _pillButton(
@@ -197,10 +195,10 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       final me = FirebaseAuth.instance.currentUser;
       if (me == null) return;
 
-      // A) 이미 접속 중인가? -> 그 앨범의 "접속자 팝업" 바로 띄우기
+      // A) 이미 접속 중인가? → 오버레이 보장 + 접속자 팝업
       final activeAlbumId = await _svc.getMyActiveVoiceAlbumId();
       if (activeAlbumId != null) {
-        // 앨범 이름 구하기 (내 앨범 목록에서)
+        // 앨범 이름
         final myAlbums = await _svc.watchMySharedAlbums().first;
         String albumName = '보이스톡';
         for (final a in myAlbums) {
@@ -210,14 +208,18 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
           }
         }
 
-        final stream = _svc
-            .watchVoiceParticipants(activeAlbumId)
-            .map((list) => list
-                .map((m) => MemberLite(
-                      uid: m.uid,
-                      name: m.name.isNotEmpty ? m.name : m.email,
-                    ))
-                .toList());
+        // 오버레이가 없으면 띄움
+        voiceOverlay.show(albumId: activeAlbumId, albumName: albumName);
+
+        // 접속자 팝업
+        final stream = _svc.watchVoiceParticipants(activeAlbumId).map(
+          (list) => list
+              .map((m) => MemberLite(
+                    uid: m.uid,
+                    name: m.name.isNotEmpty ? m.name : m.email,
+                  ))
+              .toList(),
+        );
         final initial = await stream.first;
 
         await showVoiceNowPopup(
@@ -225,12 +227,15 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
           albumName: albumName,
           initialParticipants: initial,
           participantsStream: stream,
-          onLeave: () async => _svc.leaveVoice(albumId: activeAlbumId),
+          onLeave: () async {
+            await _svc.leaveVoice(albumId: activeAlbumId);
+            voiceOverlay.hide();
+          },
         );
         return;
       }
 
-      // B) 접속 중이 아니라면: 앨범 선택 → 입장 → 접속자 팝업
+      // B) 접속 중이 아니면: 앨범 선택 → 입장 → 오버레이 → 접속자 팝업
       final albums = await _svc.watchMySharedAlbums().first;
       final albumLites =
           albums.map((a) => AlbumLite(id: a.id, name: a.name)).toList();
@@ -246,14 +251,20 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
 
       await _svc.joinVoice(albumId: selectedAlbumId);
 
-      final stream = _svc
-          .watchVoiceParticipants(selectedAlbumId)
-          .map((list) => list
-              .map((m) => MemberLite(
-                    uid: m.uid,
-                    name: m.name.isNotEmpty ? m.name : m.email,
-                  ))
-              .toList());
+      // 접속과 동시에 오버레이 표시
+      voiceOverlay.show(
+        albumId: selectedAlbumId,
+        albumName: selectedAlbum.name,
+      );
+
+      final stream = _svc.watchVoiceParticipants(selectedAlbumId).map(
+        (list) => list
+            .map((m) => MemberLite(
+                  uid: m.uid,
+                  name: m.name.isNotEmpty ? m.name : m.email,
+                ))
+            .toList(),
+      );
       final initial = await stream.first;
 
       await showVoiceNowPopup(
@@ -261,7 +272,10 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
         albumName: selectedAlbum.name,
         initialParticipants: initial,
         participantsStream: stream,
-        onLeave: () async => _svc.leaveVoice(albumId: selectedAlbumId),
+        onLeave: () async {
+          await _svc.leaveVoice(albumId: selectedAlbumId);
+          voiceOverlay.hide();
+        },
       );
     } catch (e) {
       if (!mounted) return;
