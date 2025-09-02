@@ -1,9 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
-import 'edit_screen.dart';
-import '../widgets/user_icon_button.dart';
+import '../services/shared_album_service.dart'; // 파베 앨범 서비스
+import 'edit_screen.dart'; // 편집 화면으로 이동
 
 class EditAlbumListScreen extends StatefulWidget {
   const EditAlbumListScreen({super.key});
@@ -13,189 +12,251 @@ class EditAlbumListScreen extends StatefulWidget {
 }
 
 class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
-  List<Map<String, dynamic>> _albums = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _loadAlbums();
-  }
-
-  Future<void> _loadAlbums() async {
-    final prefs = await SharedPreferences.getInstance();
-    final storedData = prefs.getString('albums');
-    if (storedData != null) {
-      final List decoded = jsonDecode(storedData);
-      setState(() {
-        _albums = List<Map<String, dynamic>>.from(decoded);
-      });
-    }
-  }
-
-  //현재 sample1, sampe2 사진이 있으면 편집 중이라 표시
-  bool _isEditing(List<dynamic> images) {
-    return images.any(
-      (image) =>
-          image.toString().contains('sample1') ||
-          image.toString().contains('sample2'),
-    );
-  }
+  final _svc = SharedAlbumService.instance;
+  String get _uid => FirebaseAuth.instance.currentUser!.uid;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
+
+      bottomNavigationBar: const Padding(
+        padding: EdgeInsets.only(bottom: 20, left: 20, right: 20),
+        child: CustomBottomNavBar(selectedIndex: 2), // 편집 탭 인덱스
+      ),
+
       body: SafeArea(
-        child: Stack(
+        child: Column(
           children: [
-            Column(
-              children: [
-                // ✅ 상단 사용자 정보
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      const UserIconButton(),
-                      const SizedBox(width: 10),
-                      const Text(
-                        '편집',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+            // 헤더
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  _buildUserAvatar(),
+                  const SizedBox(width: 10),
+                  const Text(
+                    '편집',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF625F8C),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+
+            // 앨범 목록
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF6F9FF),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: StreamBuilder<List<Album>>(
+                  stream: _svc.watchAlbums(_uid),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(
                           color: Color(0xFF625F8C),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
+                      );
+                    }
 
-                // ✅ 앨범 리스트
-                Expanded(
-                  child: _albums.isEmpty
-                      ? const Center(
+                    if (snapshot.hasError) {
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
                           child: Text(
-                            '편집 가능한 공유 앨범이 없습니다.',
-                            style: TextStyle(
-                              fontSize: 16,
-                              color: Color(0xFF625F8C),
-                            ),
-                          ),
-                        )
-                      : SingleChildScrollView(
-                          padding: const EdgeInsets.only(bottom: 90),
-                          child: Column(
-                            children: List.generate(_albums.length, (index) {
-                              final album = _albums[index];
-                              final List<dynamic> images =
-                                  album['images'] ?? [];
-                              final bool isEditing = _isEditing(images);
-
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                  vertical: 10,
-                                ),
-                                child: GestureDetector(
-                                  onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => EditScreen(
-                                          albumName: album['title'] ?? '제목 없음',
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFF6F9FF),
-                                      borderRadius: BorderRadius.circular(24),
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 16,
-                                      vertical: 24,
-                                    ),
-                                    child: Row(
-                                      crossAxisAlignment: CrossAxisAlignment
-                                          .center, // ✅ 세로 가운데 정렬
-                                      children: [
-                                        Image.asset(
-                                          'assets/icons/shared_album_list.png',
-                                          width: 50,
-                                          height: 50,
-                                        ),
-                                        const SizedBox(width: 20),
-                                        Expanded(
-                                          child: Column(
-                                            mainAxisAlignment: MainAxisAlignment
-                                                .center, // ✅ 내부 텍스트들도 중앙 정렬
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                mainAxisAlignment:
-                                                    MainAxisAlignment
-                                                        .spaceBetween,
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment
-                                                        .center, // ✅ 편집중도 가운데로
-                                                children: [
-                                                  Text(
-                                                    album['title'] ?? '제목 없음',
-                                                    style: const TextStyle(
-                                                      fontSize: 16,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                      color: Color(0xFF625F8C),
-                                                    ),
-                                                  ),
-                                                  if (isEditing)
-                                                    const Text(
-                                                      '편집 중',
-                                                      style: TextStyle(
-                                                        fontSize: 14,
-                                                        fontWeight:
-                                                            FontWeight.w500,
-                                                        color: Color(
-                                                          0xFF625F8C,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                ],
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                '사진 ${images.length}장',
-                                                style: const TextStyle(
-                                                  fontSize: 13,
-                                                  color: Color(0xFF625F8C),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            }),
+                            '에러: ${snapshot.error}',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Color(0xFF625F8C)),
                           ),
                         ),
-                ),
-              ],
-            ),
+                      );
+                    }
 
-            // ✅ 하단 네비게이션 바
-            Positioned(
-              bottom: 20,
-              left: 20,
-              right: 20,
-              child: CustomBottomNavBar(selectedIndex: 2),
+                    final items = snapshot.data ?? [];
+                    if (items.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          '편집 가능한 공유앨범이 없습니다',
+                          style: TextStyle(
+                            color: Color(0xFF625F8C),
+                            fontSize: 16,
+                          ),
+                        ),
+                      );
+                    }
+
+                    return ListView.separated(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final album = items[index];
+                        final memberCount = album.memberUids.length;
+                        final photoCount = album.photoCount;
+
+                        return GestureDetector(
+                          onTap: () => _openEdit(album), // ★ 클릭 시 편집 화면으로 이동
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 16,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Image.asset(
+                                  'assets/icons/shared_album_list.png',
+                                  width: 50,
+                                  height: 50,
+                                ),
+                                const SizedBox(width: 16),
+
+                                // 텍스트 영역
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              album.title,
+                                              style: const TextStyle(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.w600,
+                                                color: Color(0xFF625F8C),
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+
+                                          // 기존 멤버수 칩
+                                          _chip('$memberCount명'),
+
+                                          const SizedBox(width: 6),
+
+                                          // 🔹 여기 추가: 편집중 뱃지 (현재 유저가 이 앨범에서 편집 중일 때 표시)
+                                          // 기존: 내 편집 상태만 보던 StreamBuilder<EditingInfo?>
+                                          StreamBuilder<List<EditingInfo>>(
+                                            stream: _svc.watchEditingForAlbum(
+                                              album.id,
+                                            ),
+                                            builder: (context, s) {
+                                              final list =
+                                                  s.data ??
+                                                  const <EditingInfo>[];
+                                              if (list.isEmpty)
+                                                return const SizedBox.shrink();
+
+                                              // 편집자 수 표시 (예: "편집중 2")
+                                              return _chipEditing(
+                                                '편집중 ${list.length}',
+                                              );
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '사진 $photoCount장',
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          color: Color(0xFF625F8C),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  // 아바타
+  Widget _buildUserAvatar() {
+    final user = FirebaseAuth.instance.currentUser;
+    final photo = user?.photoURL;
+    return CircleAvatar(
+      radius: 24,
+      backgroundImage: (photo != null && photo.isNotEmpty)
+          ? NetworkImage(photo)
+          : null,
+      backgroundColor: const Color(0xFFD9E2FF),
+      child: (photo == null || photo.isEmpty)
+          ? const Icon(Icons.person, color: Color(0xFF625F8C))
+          : null,
+    );
+  }
+
+  // 작은 칩
+  Widget _chip(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFFD9E2FF),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 12, color: Color(0xFF625F8C)),
+      ),
+    );
+  }
+
+  Widget _chipEditing(String text) {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFE9EC),          // 살짝 분홍/경고 톤
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: const Color(0xFFFFACB7)), // 테두리로 구분
+    ),
+    child: Text(
+      text,
+      style: const TextStyle(
+        fontSize: 12,
+        color: Color(0xFFB24C5A),              // 텍스트도 강조색
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+  );
+}
+
+  // 편집 화면으로 이동
+  Future<void> _openEdit(Album album) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditScreen(
+          albumName: album.title,
+          albumId: album.id, // 필요하면 전달
         ),
       ),
     );

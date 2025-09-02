@@ -256,6 +256,70 @@ class SharedAlbumService {
     if (i < 0) return null;
     return path.substring(i + 1).toLowerCase();
   }
+
+    // === 편집 상태 저장/해제/조회 ===
+  // 경로: albums/{albumId}/editing/{uid}
+
+  /// 편집 시작(또는 갱신): 내가 어떤 사진을 편집 중인지 기록
+  Future<void> setEditing({
+    required String uid,
+    required String albumId,
+    required String photoId,
+    required String photoUrl,
+  }) async {
+    final ref = _fs.collection('albums').doc(albumId)
+        .collection('editing').doc(uid);
+
+    await ref.set({
+      'uid': uid,
+      'photoId': photoId,
+      'photoUrl': photoUrl,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    // 앨범 updatedAt 갱신 (선택)
+    await _fs.collection('albums').doc(albumId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// 편집 해제: 더 이상 편집중 아님
+  Future<void> clearEditing({
+    required String uid,
+    required String albumId,
+  }) async {
+    final ref = _fs.collection('albums').doc(albumId)
+        .collection('editing').doc(uid);
+    await ref.delete();
+  }
+
+  /// 내 편집 상태 실시간 조회(해당 앨범 기준)
+  /// - 있으면 EditingInfo 리턴, 없으면 null
+  Stream<EditingInfo?> watchMyEditing({
+    required String uid,
+    required String albumId,
+  }) {
+    final ref = _fs.collection('albums').doc(albumId)
+        .collection('editing').doc(uid);
+    return ref.snapshots().map((ds) {
+      if (!ds.exists) return null;
+      return EditingInfo.fromDoc(albumId, ds.data()!);
+    });
+  }
+
+    /// 이 앨범에서 '누가 어떤 사진을 편집중인지' 전체 실시간 목록
+  /// albums/{albumId}/editing/* 를 updatedAt desc 로 구독
+  Stream<List<EditingInfo>> watchEditingForAlbum(String albumId) {
+    final q = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('editing')
+        .orderBy('updatedAt', descending: true);
+
+    return q.snapshots().map((qs) =>
+        qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data())).toList());
+  }
+
 }
 
 // ===== 모델 =====
@@ -317,6 +381,29 @@ class Photo {
       storagePath: d['storagePath'] as String?,
       uploaderUid: d['uploaderUid'] as String?,
       createdAt: d['createdAt'] as Timestamp?,
+    );
+  }
+}
+
+class EditingInfo {
+  final String albumId;
+  final String photoId;
+  final String photoUrl;
+  final Timestamp? updatedAt;
+
+  EditingInfo({
+    required this.albumId,
+    required this.photoId,
+    required this.photoUrl,
+    required this.updatedAt,
+  });
+
+  factory EditingInfo.fromDoc(String albumId, Map<String, dynamic> d) {
+    return EditingInfo(
+      albumId: albumId,
+      photoId: (d['photoId'] ?? '') as String,
+      photoUrl: (d['photoUrl'] ?? '') as String,
+      updatedAt: d['updatedAt'] as Timestamp?,
     );
   }
 }
