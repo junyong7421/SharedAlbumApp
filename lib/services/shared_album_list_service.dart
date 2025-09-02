@@ -105,9 +105,11 @@ class SharedAlbumListService {
   // =======================================================
   //                 🔊 Voice Talk 기능
   // =======================================================
+  // 스키마:
+  // albums/{albumId}/voice/participants/list/{uid}  ← 참가자 문서
+  // voiceSessions/{uid} { albumId, joinedAt }      ← 현재 접속 상태 (인덱스 불필요)
 
   /// (1) 보이스톡 입장
-  /// - albums/{albumId}/voice/participants/{uid} 문서를 생성/갱신
   Future<void> joinVoice({
     required String albumId,
     String? uid,
@@ -138,7 +140,10 @@ class SharedAlbumListService {
       }
     }
 
-    final ref = _fs
+    final batch = _fs.batch();
+
+    // 참가자 문서 upsert
+    final participantRef = _fs
         .collection('albums')
         .doc(albumId)
         .collection('voice')
@@ -146,13 +151,22 @@ class SharedAlbumListService {
         .collection('list')
         .doc(myUid);
 
-    // participants를 하위 컬렉션(list)로 분리한 형태
-    await ref.set({
+    batch.set(participantRef, {
+      'uid': myUid, // 검색/디버깅용
       'name': _name ?? '',
       'email': _email ?? '',
       'photoUrl': _photo,
       'joinedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    // 현재 접속 상태 기록
+    final sessionRef = _fs.collection('voiceSessions').doc(myUid);
+    batch.set(sessionRef, {
+      'albumId': albumId,
+      'joinedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
   }
 
   /// (2) 보이스톡 퇴장
@@ -163,19 +177,26 @@ class SharedAlbumListService {
     final myUid = uid ?? _auth.currentUser?.uid;
     if (myUid == null) return;
 
-    final ref = _fs
+    final batch = _fs.batch();
+
+    // 참가자 문서 삭제
+    final participantRef = _fs
         .collection('albums')
         .doc(albumId)
         .collection('voice')
         .doc('participants')
         .collection('list')
         .doc(myUid);
+    batch.delete(participantRef);
 
-    await ref.delete();
+    // 접속 상태 삭제
+    final sessionRef = _fs.collection('voiceSessions').doc(myUid);
+    batch.delete(sessionRef);
+
+    await batch.commit();
   }
 
   /// (3) 현재 보이스톡 접속자 실시간 구독
-  /// - participants를 joinedAt 오름차순으로 정렬해 반환
   Stream<List<AlbumMember>> watchVoiceParticipants(String albumId) {
     final col = _fs
         .collection('albums')
@@ -196,6 +217,20 @@ class SharedAlbumListService {
         );
       }).toList();
     });
+  }
+
+  /// (4) 내가 현재 보이스톡에 참가 중인 앨범 id (없으면 null)
+  /// - 인덱스 없이 1문서 조회
+  Future<String?> getMyActiveVoiceAlbumId() async {
+    final me = _auth.currentUser;
+    if (me == null) return null;
+
+    final snap = await _fs.collection('voiceSessions').doc(me.uid).get();
+    if (!snap.exists) return null;
+
+    final data = snap.data();
+    final albumId = data?['albumId'] as String?;
+    return (albumId != null && albumId.isNotEmpty) ? albumId : null;
   }
 }
 

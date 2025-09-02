@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// ─────────────────────────────────────────────────────────
-///  경량 모델 (원하는 실제 모델로 맵핑해서 사용해도 됨)
+///  경량 모델 (화면에서 쓰는 타입)
 /// ─────────────────────────────────────────────────────────
 class AlbumLite {
   final String id;
@@ -11,7 +11,7 @@ class AlbumLite {
 
 class MemberLite {
   final String uid;
-  final String name; // 없으면 email을 넣어도 무방
+  final String name; // 없으면 email을 넣어서 넘겨도 됨
   const MemberLite({required this.uid, required this.name});
 }
 
@@ -89,7 +89,7 @@ Widget _smallActionButton(String label, {VoidCallback? onTap}) {
 
 /// ─────────────────────────────────────────────────────────
 ///  1) 앨범 선택 팝업
-///     return: 선택된 albumId
+///     return: 선택된 albumId (취소 시 null)
 /// ─────────────────────────────────────────────────────────
 Future<String?> showAlbumSelectPopup(
   BuildContext context, {
@@ -97,7 +97,7 @@ Future<String?> showAlbumSelectPopup(
 }) {
   return showDialog<String>(
     context: context,
-    barrierDismissible: true,
+    barrierDismissible: true, // 밖을 눌러도 닫힘 (요구사항)
     builder: (_) => Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 28),
@@ -141,20 +141,19 @@ Future<String?> showAlbumSelectPopup(
 
 /// ─────────────────────────────────────────────────────────
 ///  2) 현재 보이스톡 접속자 팝업 (선택형 아님)
-///     - pop 시: onLeave 호출(선택)
-///     - 실시간 반영: participantsStream 제공 시 StreamBuilder로 업데이트
-///     - participants가 null 이면 초기 participants만 표기(고정)
+///     - participantsStream 제공 시 실시간 반영
+///     - onLeave: '종료' 버튼 눌렀을 때만 호출됨
 /// ─────────────────────────────────────────────────────────
 Future<void> showVoiceNowPopup(
   BuildContext context, {
   required String albumName,
   required List<MemberLite> initialParticipants,
   Stream<List<MemberLite>>? participantsStream,
-  VoidCallback? onLeave, // '종료' 버튼 콜백 (퇴장 처리)
+  VoidCallback? onLeave,
 }) {
   return showDialog<void>(
     context: context,
-    barrierDismissible: true,
+    barrierDismissible: true, // 밖을 탭해 닫아도 접속 유지
     builder: (_) => Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 28),
@@ -187,19 +186,17 @@ class _VoiceNowBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final listView = _ParticipantsList(participants: initialParticipants);
-    final content = Column(
+    Widget content(List<MemberLite> members) => Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         _title('보이스톡 • $albumName'),
         const SizedBox(height: 16),
-        listView,
+        _ParticipantsList(participants: members),
         const SizedBox(height: 22),
         Row(
           children: [
             const Spacer(),
             _smallActionButton('종료', onTap: () async {
-              // 먼저 다이얼로그 닫고, 그 다음 onLeave 실행(UX 자연스럽게)
               Navigator.pop(context);
               await Future.delayed(const Duration(milliseconds: 10));
               if (onLeave != null) onLeave!();
@@ -209,33 +206,16 @@ class _VoiceNowBody extends StatelessWidget {
       ],
     );
 
-    // 실시간 스트림이 들어오면 그걸로 감싸서 갱신
-    if (participantsStream == null) return content;
+    if (participantsStream == null) {
+      return content(initialParticipants);
+    }
 
     return StreamBuilder<List<MemberLite>>(
       stream: participantsStream,
       initialData: initialParticipants,
       builder: (context, snap) {
-        final data = snap.data ?? initialParticipants;
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _title('보이스톡 • $albumName'),
-            const SizedBox(height: 16),
-            _ParticipantsList(participants: data),
-            const SizedBox(height: 22),
-            Row(
-              children: [
-                const Spacer(),
-                _smallActionButton('종료', onTap: () async {
-                  Navigator.pop(context);
-                  await Future.delayed(const Duration(milliseconds: 10));
-                  if (onLeave != null) onLeave!();
-                }),
-              ],
-            ),
-          ],
-        );
+        final members = snap.data ?? initialParticipants;
+        return content(members);
       },
     );
   }
