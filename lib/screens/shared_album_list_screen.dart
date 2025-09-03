@@ -4,6 +4,10 @@ import '../services/shared_album_list_service.dart';
 
 // 만약 하단 커스텀 네비바를 쓰고 싶으면 주석 해제!
 import '../widgets/custom_bottom_nav_bar.dart';
+//0902
+import '../services/voice_rooms_service.dart';
+import '../screens/voice_call_screen.dart';
+//0902
 
 class SharedAlbumListScreen extends StatefulWidget {
   const SharedAlbumListScreen({super.key});
@@ -30,7 +34,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
         child: Column(
           children: [
             // 헤더
-            Padding(
+            /*Padding(
               padding: const EdgeInsets.all(16.0),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -44,6 +48,56 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       fontWeight: FontWeight.bold,
                       color: Color(0xFF625F8C),
                     ),
+                  ),
+                  const Spacer(), // ✅ 오른쪽 정렬 0902
+                  IconButton(
+                    // ✅ 통화 버튼
+                    icon: const Icon(Icons.call, color: Color(0xFF625F8C)),
+                    onPressed: _onTapCall,
+                    tooltip: '보이스 방 참가',
+                  ),
+                  //0902
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),*/
+            // 헤더
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween, // ← 핵심
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // 왼쪽 영역(아바타 + 타이틀)을 Expanded로 감싸 폭 확보
+                  Expanded(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildUserAvatar(),
+                        const SizedBox(width: 10),
+                        const Flexible(
+                          child: Text(
+                            '공유앨범 목록 및 멤버관리',
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF625F8C),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // 오른쪽 통화 아이콘
+                  IconButton(
+                    iconSize: 26,
+                    splashRadius: 22,
+                    icon: const Icon(Icons.call, color: Color(0xFF625F8C)),
+                    onPressed: _onTapCall,
+                    tooltip: '보이스 방 참가',
                   ),
                 ],
               ),
@@ -365,6 +419,43 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       ).showSnackBar(SnackBar(content: Text('불러오기 실패: $e')));
     }
   }
+  //0902
+  // ... 클래스 내부
+
+  Future<void> _onTapCall() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('로그인이 필요합니다.')));
+      return;
+    }
+
+    final rooms = await VoiceRoomsService.instance.fetchMyVoiceRooms(uid);
+
+    if (!mounted) return;
+    if (rooms.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('참가 가능한 보이스 방이 없습니다.')));
+      return;
+    }
+
+    // ✅ 제네릭/타입을 VoiceRoomInfo 로
+    final selected = await showDialog<VoiceRoomInfo>(
+      context: context,
+      builder: (_) => _VoiceRoomPickerDialog(rooms: rooms),
+    );
+
+    if (!mounted || selected == null) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            VoiceCallScreen(roomId: selected.id, title: selected.name),
+      ),
+    );
+  } //0902
 }
 
 /// 친구 선택 바텀시트
@@ -506,3 +597,35 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
     );
   }
 }
+
+//0902
+class _VoiceRoomPickerDialog extends StatelessWidget {
+  final List<VoiceRoomInfo> rooms; // ✅ 타입 수정
+  const _VoiceRoomPickerDialog({required this.rooms});
+
+  @override
+  Widget build(BuildContext context) {
+    return SimpleDialog(
+      title: const Text('보이스 방 선택'),
+      children: rooms.map((r) {
+        return SimpleDialogOption(
+          onPressed: () => Navigator.pop(context, r),
+          child: Row(
+            children: [
+              const Icon(Icons.speaker_group_outlined),
+              const SizedBox(width: 8),
+              Expanded(child: Text(r.name, overflow: TextOverflow.ellipsis)),
+              const SizedBox(width: 6),
+              Text(
+                '${r.memberCount}명',
+                style: const TextStyle(color: Colors.grey),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+//0902

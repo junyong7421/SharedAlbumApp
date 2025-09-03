@@ -19,6 +19,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   google_sign_in: ^6.1.0
   shared_preferences: ^2.2.2
+  
+  cloud_functions: ^5.1.3   # joinVoiceRoom, leaveVoiceRoom 같은 Cloud Functions 호출
+  flutter_webrtc: ^0.12.7   # WebRTC(보이스/영상 통화) 핵심 패키지
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
