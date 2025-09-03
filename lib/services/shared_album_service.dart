@@ -402,6 +402,19 @@ class SharedAlbumService {
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
+
+  Future<void> deleteEditedPhoto({
+    required String? albumId,
+    required String editedId,
+  }) async {
+    if (albumId == null) throw ArgumentError('albumId is null');
+    await _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('edited')
+        .doc(editedId)
+        .delete();
+  }
 }
 
 // ===== 모델 =====

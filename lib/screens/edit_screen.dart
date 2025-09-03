@@ -290,8 +290,7 @@ class _EditScreenState extends State<EditScreen> {
                                 ],
                               ),
                               child: StreamBuilder<List<EditedPhoto>>(
-                                stream:
-                                    _svc.watchEditedPhotos(widget.albumId),
+                                stream: _svc.watchEditedPhotos(widget.albumId),
                                 builder: (context, snap2) {
                                   if (snap2.connectionState ==
                                       ConnectionState.waiting) {
@@ -338,13 +337,18 @@ class _EditScreenState extends State<EditScreen> {
                                     itemCount: edited.length,
                                     itemBuilder: (_, i) {
                                       final it = edited[i];
-                                      return ClipRRect(
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: Image.network(
-                                          it.url,
-                                          width: 100,
-                                          height: 100,
-                                          fit: BoxFit.cover,
+                                      return GestureDetector(
+                                        onTap: () =>
+                                            _showEditedActions(context, it),
+                                        child: ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          child: Image.network(
+                                            it.url,
+                                            width: 100,
+                                            height: 100,
+                                            fit: BoxFit.cover,
+                                          ),
                                         ),
                                       );
                                     },
@@ -390,6 +394,81 @@ class _EditScreenState extends State<EditScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  // === 하단 액션: 편집된 사진 탭 시 ===
+  void _showEditedActions(BuildContext context, EditedPhoto item) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.edit),
+                title: const Text('편집하기'),
+                onTap: () async {
+                  Navigator.pop(context);
+
+                  // 1) 이 편집본을 "편집중"으로 등록
+                  final photoIdForEditing =
+                      (item.originalPhotoId.isNotEmpty)
+                          ? item.originalPhotoId
+                          : 'edited:${item.id}';
+                  try {
+                    await _svc.setEditing(
+                      uid: _uid,
+                      albumId: widget.albumId,
+                      photoId: photoIdForEditing,
+                      photoUrl: item.url, // 편집본 URL로 표시
+                    );
+                  } catch (_) {}
+
+                  // 2) 편집 화면으로 단일 이미지 모드로 이동
+                  if (!mounted) return;
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => EditViewScreen(
+                        albumName: widget.albumName,
+                        albumId: widget.albumId,   // 저장 시 사용 가능
+                        imagePath: item.url,       // 단일 이미지 모드
+                      ),
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('삭제'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  try {
+                    await _svc.deleteEditedPhoto(
+                      albumId: widget.albumId,
+                      editedId: item.id,
+                    );
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('편집된 사진을 삭제했습니다.')),
+                    );
+                  } catch (e) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('삭제 실패: $e')),
+                    );
+                  }
+                },
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
