@@ -628,7 +628,6 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                         builder: (context) => EditViewScreen(
                                           albumName: title,
                                           imagePath: p.url,
-                                          albumId: albumId,
                                         ),
                                       ),
                                     );

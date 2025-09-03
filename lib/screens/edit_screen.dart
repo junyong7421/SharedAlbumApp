@@ -192,6 +192,7 @@ class _EditScreenState extends State<EditScreen> {
                                         builder: (context) => EditViewScreen(
                                           imagePath: url!,
                                           albumName: widget.albumName,
+                                          albumId: widget.albumId,
                                         ),
                                       ),
                                     );
@@ -235,56 +236,13 @@ class _EditScreenState extends State<EditScreen> {
                       ),
                     );
 
-                    // === 편집된 사진(썸네일 리스트) ===
-                    final editedThumbs = Center(
-                      child: Container(
-                        width: 300,
-                        height: 180,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 4,
-                              offset: Offset(2, 2),
-                            ),
-                          ],
-                        ),
-                        child: hasImages
-                            ? ListView.separated(
-                                scrollDirection: Axis.horizontal,
-                                padding: const EdgeInsets.all(12),
-                                separatorBuilder: (_, __) =>
-                                    const SizedBox(width: 8),
-                                itemCount: list.length,
-                                itemBuilder: (_, i) {
-                                  final it = list[i];
-                                  return GestureDetector(
-                                    onTap: () {
-                                      setState(() => _currentIndex = i);
-                                    },
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Image.network(
-                                        it.photoUrl,
-                                        width: 100,
-                                        height: 100,
-                                        fit: BoxFit.cover,
-                                      ),
-                                    ),
-                                  );
-                                },
-                              )
-                            : _emptyThumbs(),
-                      ),
-                    );
-
                     return Expanded(
                       child: Column(
                         children: [
                           preview,
                           const SizedBox(height: 30),
+
+                          // ====== 편집된 사진 (edited/*) ======
                           Align(
                             alignment: Alignment.centerLeft,
                             child: Container(
@@ -314,14 +272,95 @@ class _EditScreenState extends State<EditScreen> {
                             ),
                           ),
                           const SizedBox(height: 12),
-                          editedThumbs,
+
+                          // ⬇ 저장된 편집본만 들어가는 흰 박스
+                          Center(
+                            child: Container(
+                              width: 300,
+                              height: 180,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Colors.black12,
+                                    blurRadius: 4,
+                                    offset: Offset(2, 2),
+                                  ),
+                                ],
+                              ),
+                              child: StreamBuilder<List<EditedPhoto>>(
+                                stream:
+                                    _svc.watchEditedPhotos(widget.albumId),
+                                builder: (context, snap2) {
+                                  if (snap2.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return const Center(
+                                      child: CircularProgressIndicator(
+                                        color: Color(0xFF625F8C),
+                                      ),
+                                    );
+                                  }
+                                  if (snap2.hasError) {
+                                    return Center(
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(16),
+                                        child: Text(
+                                          '편집된 사진을 불러오는 중 오류가 발생했습니다.\n${snap2.error}',
+                                          textAlign: TextAlign.center,
+                                          style: const TextStyle(
+                                            color: Color(0xFF625F8C),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }
+
+                                  final edited =
+                                      snap2.data ?? const <EditedPhoto>[];
+                                  if (edited.isEmpty) {
+                                    return const Center(
+                                      child: Text(
+                                        '편집된 사진이 없습니다',
+                                        style: TextStyle(
+                                          color: Color(0xFF625F8C),
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    );
+                                  }
+
+                                  return ListView.separated(
+                                    scrollDirection: Axis.horizontal,
+                                    padding: const EdgeInsets.all(12),
+                                    separatorBuilder: (_, __) =>
+                                        const SizedBox(width: 8),
+                                    itemCount: edited.length,
+                                    itemBuilder: (_, i) {
+                                      final it = edited[i];
+                                      return ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: Image.network(
+                                          it.url,
+                                          width: 100,
+                                          height: 100,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      );
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     );
                   },
                 ),
 
-                const SizedBox(height: 70),
+                // 바텀바 침범 방지 여백
+                const SizedBox(height: 110),
               ],
             ),
 
@@ -349,18 +388,6 @@ class _EditScreenState extends State<EditScreen> {
             color: Color(0xFF625F8C),
             fontWeight: FontWeight.w600,
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _emptyThumbs() {
-    return Center(
-      child: Text(
-        '편집된 사진이 없습니다',
-        style: TextStyle(
-          color: const Color(0xFF625F8C).withOpacity(0.9),
-          fontWeight: FontWeight.w500,
         ),
       ),
     );

@@ -11,6 +11,12 @@ import 'package:image_picker/image_picker.dart';
 ///   albums/{albumId}/photos/{photoId} {
 ///     url, storagePath, uploaderUid, createdAt
 ///   }
+///   albums/{albumId}/editing/{uid} {
+///     uid, photoId, photoUrl, updatedAt
+///   }
+///   albums/{albumId}/edited/{editedId} {
+///     url, originalPhotoId, editorUid, createdAt
+///   }
 /// Storage:
 ///   albums/{albumId}/{file}.jpg/png
 class SharedAlbumService {
@@ -22,7 +28,6 @@ class SharedAlbumService {
   final _picker = ImagePicker();
 
   /// 내가 멤버인 앨범 목록 (실시간)
-  /// - memberUids 배열에 내 uid가 포함된 문서들
   Stream<List<Album>> watchAlbums(String uid) {
     final q = _fs
         .collection('albums')
@@ -35,8 +40,6 @@ class SharedAlbumService {
   }
 
   /// 앨범 생성
-  /// - ownerUid = uid
-  /// - memberUids = [uid]
   Future<String> createAlbum({
     required String uid,
     required String title,
@@ -72,27 +75,34 @@ class SharedAlbumService {
     required String albumId,
   }) async {
     final albumRef = _fs.collection('albums').doc(albumId);
-    final photosRef = albumRef.collection('photos');
 
-    // 1) 모든 사진 문서와 스토리지 파일 삭제
-    final photos = await photosRef.get();
+    // photos 삭제 + 스토리지 삭제
+    final photos = await albumRef.collection('photos').get();
     for (final doc in photos.docs) {
       final data = doc.data();
       final storagePath = data['storagePath'] as String?;
       if (storagePath != null) {
         try {
           await _storage.ref(storagePath).delete();
-        } catch (_) {
-          // 이미 지워졌을 수 있음
-        }
+        } catch (_) {}
       }
       await doc.reference.delete();
     }
 
-    // 2) 앨범 문서 삭제
+    // editing, edited 서브콜렉션 정리 (문서만)
+    final editing = await albumRef.collection('editing').get();
+    for (final d in editing.docs) {
+      await d.reference.delete();
+    }
+    final edited = await albumRef.collection('edited').get();
+    for (final d in edited.docs) {
+      await d.reference.delete();
+    }
+
+    // 앨범 문서 삭제
     await albumRef.delete();
 
-    // 3) Storage 폴더 잔여 정리 (best effort)
+    // Storage 폴더 잔여 정리 (best effort)
     try {
       final folderRef = _storage.ref('albums/$albumId');
       final list = await folderRef.listAll();
@@ -103,7 +113,6 @@ class SharedAlbumService {
   }
 
   /// 갤러리에서 사진 추가(다중 선택 가능)
-  /// - Storage 업로드 후 photos 서브컬렉션에 저장
   Future<void> addPhotosFromGallery({
     required String uid, // 업로더 uid 저장용
     required String albumId,
@@ -257,7 +266,7 @@ class SharedAlbumService {
     return path.substring(i + 1).toLowerCase();
   }
 
-    // === 편집 상태 저장/해제/조회 ===
+  // === 편집 상태 저장/해제/조회 ===
   // 경로: albums/{albumId}/editing/{uid}
 
   /// 편집 시작(또는 갱신): 내가 어떤 사진을 편집 중인지 기록
@@ -267,8 +276,11 @@ class SharedAlbumService {
     required String photoId,
     required String photoUrl,
   }) async {
-    final ref = _fs.collection('albums').doc(albumId)
-        .collection('editing').doc(uid);
+    final ref = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('editing')
+        .doc(uid);
 
     await ref.set({
       'uid': uid,
@@ -288,27 +300,31 @@ class SharedAlbumService {
     required String uid,
     required String albumId,
   }) async {
-    final ref = _fs.collection('albums').doc(albumId)
-        .collection('editing').doc(uid);
+    final ref = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('editing')
+        .doc(uid);
     await ref.delete();
   }
 
   /// 내 편집 상태 실시간 조회(해당 앨범 기준)
-  /// - 있으면 EditingInfo 리턴, 없으면 null
   Stream<EditingInfo?> watchMyEditing({
     required String uid,
     required String albumId,
   }) {
-    final ref = _fs.collection('albums').doc(albumId)
-        .collection('editing').doc(uid);
+    final ref = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('editing')
+        .doc(uid);
     return ref.snapshots().map((ds) {
       if (!ds.exists) return null;
       return EditingInfo.fromDoc(albumId, ds.data()!);
     });
   }
 
-    /// 이 앨범에서 '누가 어떤 사진을 편집중인지' 전체 실시간 목록
-  /// albums/{albumId}/editing/* 를 updatedAt desc 로 구독
+  /// 이 앨범에서 '누가 어떤 사진을 편집중인지' 전체 실시간 목록
   Stream<List<EditingInfo>> watchEditingForAlbum(String albumId) {
     final q = _fs
         .collection('albums')
@@ -316,10 +332,76 @@ class SharedAlbumService {
         .collection('editing')
         .orderBy('updatedAt', descending: true);
 
-    return q.snapshots().map((qs) =>
-        qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data())).toList());
+    return q.snapshots().map(
+      (qs) =>
+          qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data())).toList(),
+    );
   }
 
+  // === 편집 완료(저장) ===
+  // 경로: albums/{albumId}/edited/{autoId}
+
+  /// 편집본 저장(완료)
+  /// - editedUrl: 저장된(또는 합성된) 최종 이미지 URL
+  /// - originalPhotoId: 원본 photos/{photoId} id
+  /// - editorUid: 저장한 사용자 uid
+  Future<void> saveEditedPhotoFromUrl({
+    required String albumId,
+    required String editorUid,
+    required String originalPhotoId,
+    required String editedUrl,
+  }) async {
+    final editedRef = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('edited')
+        .doc();
+
+    await editedRef.set({
+      'url': editedUrl,
+      'originalPhotoId': originalPhotoId,
+      'editorUid': editorUid,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    // 편집 완료하면 '편집중' 상태 해제(선택적)
+    try {
+      await clearEditing(uid: editorUid, albumId: albumId);
+    } catch (_) {}
+  }
+
+  /// 편집 완료 목록(실시간) - 최신순
+  Stream<List<EditedPhoto>> watchEditedPhotos(String albumId) {
+    final q = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('edited')
+        .orderBy('createdAt', descending: true);
+
+    return q.snapshots().map(
+      (qs) => qs.docs.map((d) => EditedPhoto.fromDoc(d.id, d.data())).toList(),
+    );
+  }
+
+  Future<void> saveEditedPhoto({
+    required String albumId,
+    required String url,
+    required String editorUid,
+  }) async {
+    final ref = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('edited')
+        .doc();
+    await ref.set({
+      'url': url,
+      'editorUid': editorUid,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    await _fs.collection('albums').doc(albumId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
 }
 
 // ===== 모델 =====
@@ -404,6 +486,32 @@ class EditingInfo {
       photoId: (d['photoId'] ?? '') as String,
       photoUrl: (d['photoUrl'] ?? '') as String,
       updatedAt: d['updatedAt'] as Timestamp?,
+    );
+  }
+}
+
+class EditedPhoto {
+  final String id;
+  final String url;
+  final String originalPhotoId;
+  final String editorUid;
+  final Timestamp? createdAt;
+
+  EditedPhoto({
+    required this.id,
+    required this.url,
+    required this.originalPhotoId,
+    required this.editorUid,
+    required this.createdAt,
+  });
+
+  factory EditedPhoto.fromDoc(String id, Map<String, dynamic> d) {
+    return EditedPhoto(
+      id: id,
+      url: (d['url'] ?? '') as String,
+      originalPhotoId: (d['originalPhotoId'] ?? '') as String,
+      editorUid: (d['editorUid'] ?? '') as String,
+      createdAt: d['createdAt'] as Timestamp?,
     );
   }
 }
