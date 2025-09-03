@@ -155,7 +155,6 @@ class _EditScreenState extends State<EditScreen> {
                     final list = snap.data ?? const <EditingInfo>[];
                     final hasImages = list.isNotEmpty;
 
-                    // 목록 크기 변화에도 안전한 인덱스
                     if (hasImages) {
                       _currentIndex %= list.length;
                       if (_currentIndex < 0) _currentIndex = 0;
@@ -163,8 +162,9 @@ class _EditScreenState extends State<EditScreen> {
                       _currentIndex = 0;
                     }
 
-                    final String? url =
-                        hasImages ? list[_currentIndex].photoUrl : null;
+                    final String? url = hasImages
+                        ? list[_currentIndex].photoUrl
+                        : null;
 
                     // === 화살표 + 중앙 사진 ===
                     final preview = Center(
@@ -175,10 +175,10 @@ class _EditScreenState extends State<EditScreen> {
                             icon: const Icon(Icons.arrow_left, size: 32),
                             onPressed: hasImages
                                 ? () => setState(() {
-                                      _currentIndex =
-                                          (_currentIndex - 1 + list.length) %
-                                              list.length;
-                                    })
+                                    _currentIndex =
+                                        (_currentIndex - 1 + list.length) %
+                                        list.length;
+                                  })
                                 : null,
                             color: hasImages ? null : Colors.black26,
                           ),
@@ -193,6 +193,10 @@ class _EditScreenState extends State<EditScreen> {
                                           imagePath: url!,
                                           albumName: widget.albumName,
                                           albumId: widget.albumId,
+                                          editedId: list[_currentIndex]
+                                              .editedId, // 편집본에서 온 경우 덮어쓰기 대상
+                                          originalPhotoId: list[_currentIndex]
+                                              .originalPhotoId, // 원본에서 온 경우 추적용
                                         ),
                                       ),
                                     );
@@ -226,9 +230,9 @@ class _EditScreenState extends State<EditScreen> {
                             icon: const Icon(Icons.arrow_right, size: 32),
                             onPressed: hasImages
                                 ? () => setState(() {
-                                      _currentIndex =
-                                          (_currentIndex + 1) % list.length;
-                                    })
+                                    _currentIndex =
+                                        (_currentIndex + 1) % list.length;
+                                  })
                                 : null,
                             color: hasImages ? null : Colors.black26,
                           ),
@@ -246,8 +250,10 @@ class _EditScreenState extends State<EditScreen> {
                           Align(
                             alignment: Alignment.centerLeft,
                             child: Container(
-                              margin:
-                                  const EdgeInsets.only(left: 24, bottom: 8),
+                              margin: const EdgeInsets.only(
+                                left: 24,
+                                bottom: 8,
+                              ),
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 16,
                                 vertical: 6,
@@ -341,8 +347,9 @@ class _EditScreenState extends State<EditScreen> {
                                         onTap: () =>
                                             _showEditedActions(context, it),
                                         child: ClipRRect(
-                                          borderRadius:
-                                              BorderRadius.circular(12),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
                                           child: Image.network(
                                             it.url,
                                             width: 100,
@@ -415,29 +422,32 @@ class _EditScreenState extends State<EditScreen> {
                 onTap: () async {
                   Navigator.pop(context);
 
-                  // 1) 이 편집본을 "편집중"으로 등록
-                  final photoIdForEditing =
-                      (item.originalPhotoId.isNotEmpty)
-                          ? item.originalPhotoId
-                          : 'edited:${item.id}';
+                  // ✅ 변경된 setEditing 시그니처에 맞게 호출
                   try {
                     await _svc.setEditing(
                       uid: _uid,
                       albumId: widget.albumId,
-                      photoId: photoIdForEditing,
-                      photoUrl: item.url, // 편집본 URL로 표시
+                      photoUrl: item.url,
+                      source: 'edited', // 편집본에서 재편집 시작
+                      editedId: item.id, // 어떤 편집본인지
+                      // 원본 photoId가 있다면 같이 넘김(없으면 null)
+                      originalPhotoId: ((item.originalPhotoId ?? '').isNotEmpty)
+                          ? item.originalPhotoId
+                          : null,
                     );
                   } catch (_) {}
 
-                  // 2) 편집 화면으로 단일 이미지 모드로 이동
+                  // 편집 화면으로 이동 (덮어쓰기 모드 지원 시 editedId 전달)
                   if (!mounted) return;
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (_) => EditViewScreen(
                         albumName: widget.albumName,
-                        albumId: widget.albumId,   // 저장 시 사용 가능
-                        imagePath: item.url,       // 단일 이미지 모드
+                        albumId: widget.albumId,
+                        imagePath: item.url,
+                        // EditViewScreen에 optional editedId 파라미터가 있다고 가정
+                        editedId: item.id,
                       ),
                     ),
                   );
@@ -459,9 +469,9 @@ class _EditScreenState extends State<EditScreen> {
                     );
                   } catch (e) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('삭제 실패: $e')),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
                   }
                 },
               ),

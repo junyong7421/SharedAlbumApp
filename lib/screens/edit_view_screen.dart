@@ -7,14 +7,20 @@ import '../services/shared_album_service.dart';
 class EditViewScreen extends StatefulWidget {
   // albumId(파베) 또는 imagePath(로컬/URL) 중 하나만 있으면 동작
   final String albumName;
-  final String? albumId;     // 저장/편집상태 해제에만 사용
-  final String? imagePath;   // 단일 이미지 표시
+  final String? albumId;        // 저장/편집상태 해제에 사용
+  final String? imagePath;      // 단일 이미지 표시
+
+  // ✅ 추가: 덮어쓰기/출처 추적용 (둘 다 옵션)
+  final String? editedId;       // 편집본에서 "다시 편집"으로 들어온 경우 사용(덮어쓰기 대상)
+  final String? originalPhotoId; // 원본 사진에서 편집 시작한 경우, 편집본에 원본을 기록
 
   const EditViewScreen({
     super.key,
     required this.albumName,
     this.albumId,
     this.imagePath,
+    this.editedId,        // ⬅ 추가
+    this.originalPhotoId, // ⬅ 추가
   }) : assert(
           albumId != null || imagePath != null,
           'albumId 또는 imagePath 중 하나는 반드시 필요합니다.',
@@ -31,7 +37,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   final _svc = SharedAlbumService.instance;
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
 
-  // ✅ 프리뷰는 항상 단일 이미지로만 렌더링 (스트림 안 씀)
+  // 단일 미리보기만 사용
   bool get _useStream => false;
 
   final List<IconData> _toolbarIcons = const [
@@ -46,32 +52,53 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   // === 저장 처리 ===
   Future<void> _onSave() async {
-    // albumId & imagePath 둘 다 있어야 edited/*에 기록 가능
+    // 필수 값 확인
     if (widget.albumId == null || widget.imagePath == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('저장할 수 없습니다 (필수 정보 부족).')),
       );
       return;
     }
-    try {
-      // 1) 편집본 저장 (편집된 사진)
-      await _svc.saveEditedPhoto(
-        albumId: widget.albumId!,
-        url: widget.imagePath!,   // 실제 앱에선 편집 결과물의 URL을 넣어야 함
-        editorUid: _uid,
-      );
 
-      // 2) 편집중 해제
-      await _svc.clearEditing(
-        uid: _uid,
-        albumId: widget.albumId!,
-      );
+    try {
+      // 🔹 1) 편집본 재편집 → 덮어쓰기
+      if (widget.editedId != null && widget.editedId!.isNotEmpty) {
+        await _svc.saveEditedPhotoOverwrite(
+          albumId: widget.albumId!,
+          editedId: widget.editedId!,   // 이 문서의 url을 새 결과로 교체
+          newUrl: widget.imagePath!,    // 실제 앱에서는 편집 결과물 URL을 넣으세요
+          editorUid: _uid,
+        );
+      }
+      // 🔹 2) 원본 → 새 편집본 생성(원본 추적 포함)
+      else if (widget.originalPhotoId != null &&
+          widget.originalPhotoId!.isNotEmpty) {
+        await _svc.saveEditedPhotoFromUrl(
+          albumId: widget.albumId!,
+          editorUid: _uid,
+          originalPhotoId: widget.originalPhotoId!, // 원본 id 기록
+          editedUrl: widget.imagePath!,             // 결과물 URL
+        );
+      }
+      // 🔹 3) 예외/호환: originalPhotoId가 없을 때 최소 저장
+      else {
+        await _svc.saveEditedPhoto(
+          albumId: widget.albumId!,
+          url: widget.imagePath!,
+          editorUid: _uid,
+        );
+      }
+
+      // 편집중 상태 해제
+      if (widget.albumId != null) {
+        await _svc.clearEditing(uid: _uid, albumId: widget.albumId!);
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('편집이 저장되었습니다.')),
       );
-      Navigator.pop(context); // 이전 화면(편집 목록)으로 복귀
+      Navigator.pop(context); // 이전 화면으로 복귀
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

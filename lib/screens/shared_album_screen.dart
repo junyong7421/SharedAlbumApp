@@ -617,17 +617,19 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                     await _svc.setEditing(
                                       uid: _uid,
                                       albumId: albumId,
-                                      photoId: p.id,
                                       photoUrl: p.url,
+                                      source: 'photos', // 원본에서 편집 시작
+                                      originalPhotoId: p.id, // 원본 photoId 전달
                                     );
-
                                     // 2. 편집 화면으로 이동
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => EditViewScreen(
                                           albumName: title,
+                                          albumId: albumId, // 저장/덮어쓰기 시 필요
                                           imagePath: p.url,
+                                          originalPhotoId: p.id,
                                         ),
                                       ),
                                     );
