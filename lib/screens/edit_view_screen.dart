@@ -107,6 +107,40 @@ class _EditViewScreenState extends State<EditViewScreen> {
     }
   }
 
+  // [변경] 앨범 이름과 동일한 스타일의 그라데이션 필 버튼
+  Widget _gradientPillButton({
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: const LinearGradient(
+            colors: [
+              Color(0xFFC6DCFF),
+              Color(0xFFD2D1FF),
+              Color(0xFFF5CFFF),
+            ],
+          ),
+          boxShadow: const [
+            BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(1, 1)),
+          ],
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -167,6 +201,17 @@ class _EditViewScreenState extends State<EditViewScreen> {
                           ),
                         ),
                       ),
+                    ],
+                  ),
+                ),
+
+                // [변경] 저장 버튼: 상단 바 바로 아래, 오른쪽 정렬 + 동일 그라데이션
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                  child: Row(
+                    children: [
+                      const Spacer(),
+                      _gradientPillButton(label: '저장', onTap: _onSave),
                     ],
                   ),
                 ),
@@ -234,32 +279,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
             ),
 
             // 하단 네비게이션 바 + 저장 버튼
+            // [변경] 하단의 기존 저장 버튼 제거, 네비만 유지
             Positioned(
               bottom: 20,
               left: 20,
               right: 20,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 저장 버튼 (바텀바 위에)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: ElevatedButton(
-                      onPressed: _onSave,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF397CFF),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        elevation: 2,
-                      ),
-                      child: const Text('저장'),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  CustomBottomNavBar(selectedIndex: _selectedIndex),
-                ],
-              ),
+              child: CustomBottomNavBar(selectedIndex: _selectedIndex),
             ),
           ],
         ),
