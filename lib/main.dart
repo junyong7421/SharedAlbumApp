@@ -5,6 +5,9 @@ import 'package:firebase_app_check/firebase_app_check.dart';
 
 import 'screens/login_screen.dart';
 
+// 전역 오버레이용 네비게이터 키
+import 'screens/voice_call_overlay.dart';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -49,6 +52,10 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+
+      // ✅ 전역 오버레이를 위해 꼭 필요
+      navigatorKey: rootNavigatorKey,
+      
       title: 'Shared Album App',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),

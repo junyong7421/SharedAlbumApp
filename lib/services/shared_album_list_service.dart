@@ -12,8 +12,6 @@ class SharedAlbumListService {
   User? get currentUser => _auth.currentUser;
 
   /// 내가 속한 공유 앨범 목록 (실시간)
-  /// - ownerUid도 반드시 memberUids에 포함되어 있어야 함(권장 스키마)
-  ///   => 앨범 생성 시 memberUids: [ownerUid]
   Stream<List<SharedAlbumListItem>> watchMySharedAlbums() {
     final me = _auth.currentUser;
     if (me == null) return const Stream<List<SharedAlbumListItem>>.empty();
@@ -31,7 +29,7 @@ class SharedAlbumListService {
     });
   }
 
-  /// 앨범의 멤버 프로필들 (users/{uid} 문서를 whereIn 10개씩 분할 조회)
+  /// 앨범의 멤버 프로필들
   Future<List<AlbumMember>> fetchAlbumMembers(String albumId) async {
     final doc = await _fs.collection('albums').doc(albumId).get();
     if (!doc.exists) return [];
@@ -67,15 +65,13 @@ class SharedAlbumListService {
       }
     }
 
-    // memberUids의 순서를 유지하려면 아래 정렬 유지
     members.sort(
       (a, b) => memberUids.indexOf(a.uid).compareTo(memberUids.indexOf(b.uid)),
     );
     return members;
   }
 
-  /// 내 친구 목록 가져오기 (users/{me}/friends)
-  /// - friends 서브콜렉션 문서 id는 friendUid, 필드는 {name, email, photoUrl}
+  /// 내 친구 목록
   Future<List<AlbumMember>> fetchMyFriends() async {
     final me = _auth.currentUser;
     if (me == null) return [];
@@ -97,7 +93,6 @@ class SharedAlbumListService {
   }
 
   /// 앨범에 멤버 추가
-  /// - Firestore 보안 규칙에서: 멤버/오너만 update 허용되어 있어야 함
   Future<void> addMembers(String albumId, List<String> friendUids) async {
     if (friendUids.isEmpty) return;
     final ref = _fs.collection('albums').doc(albumId);
@@ -105,6 +100,137 @@ class SharedAlbumListService {
       'memberUids': FieldValue.arrayUnion(friendUids),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  // =======================================================
+  //                 🔊 Voice Talk 기능
+  // =======================================================
+  // 스키마:
+  // albums/{albumId}/voice/participants/list/{uid}  ← 참가자 문서
+  // voiceSessions/{uid} { albumId, joinedAt }      ← 현재 접속 상태 (인덱스 불필요)
+
+  /// (1) 보이스톡 입장
+  Future<void> joinVoice({
+    required String albumId,
+    String? uid,
+    String? name,
+    String? email,
+    String? photoUrl,
+  }) async {
+    final me = _auth.currentUser;
+    final myUid = uid ?? me?.uid;
+    if (myUid == null) throw StateError('No signed-in user');
+
+    // name/email/photoUrl이 없으면 users/{uid}에서 보완
+    String? _name = name;
+    String? _email = email;
+    String? _photo = photoUrl;
+
+    if (_name == null || _email == null || _photo == null) {
+      final uDoc = await _fs.collection('users').doc(myUid).get();
+      if (uDoc.exists) {
+        final u = uDoc.data()!;
+        _name ??= (u['name'] ?? '') as String;
+        _email ??= (u['email'] ?? '') as String;
+        _photo ??= u['photoUrl'] as String?;
+      } else {
+        _name ??= me?.displayName ?? '';
+        _email ??= me?.email ?? '';
+        _photo ??= me?.photoURL;
+      }
+    }
+
+    final batch = _fs.batch();
+
+    // 참가자 문서 upsert
+    final participantRef = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('voice')
+        .doc('participants')
+        .collection('list')
+        .doc(myUid);
+
+    batch.set(participantRef, {
+      'uid': myUid, // 검색/디버깅용
+      'name': _name ?? '',
+      'email': _email ?? '',
+      'photoUrl': _photo,
+      'joinedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    // 현재 접속 상태 기록
+    final sessionRef = _fs.collection('voiceSessions').doc(myUid);
+    batch.set(sessionRef, {
+      'albumId': albumId,
+      'joinedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    await batch.commit();
+  }
+
+  /// (2) 보이스톡 퇴장
+  Future<void> leaveVoice({
+    required String albumId,
+    String? uid,
+  }) async {
+    final myUid = uid ?? _auth.currentUser?.uid;
+    if (myUid == null) return;
+
+    final batch = _fs.batch();
+
+    // 참가자 문서 삭제
+    final participantRef = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('voice')
+        .doc('participants')
+        .collection('list')
+        .doc(myUid);
+    batch.delete(participantRef);
+
+    // 접속 상태 삭제
+    final sessionRef = _fs.collection('voiceSessions').doc(myUid);
+    batch.delete(sessionRef);
+
+    await batch.commit();
+  }
+
+  /// (3) 현재 보이스톡 접속자 실시간 구독
+  Stream<List<AlbumMember>> watchVoiceParticipants(String albumId) {
+    final col = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('voice')
+        .doc('participants')
+        .collection('list')
+        .orderBy('joinedAt');
+
+    return col.snapshots().map((snap) {
+      return snap.docs.map((d) {
+        final x = d.data();
+        return AlbumMember(
+          uid: d.id,
+          name: (x['name'] ?? '') as String,
+          email: (x['email'] ?? '') as String,
+          photoUrl: x['photoUrl'] as String?,
+        );
+      }).toList();
+    });
+  }
+
+  /// (4) 내가 현재 보이스톡에 참가 중인 앨범 id (없으면 null)
+  /// - 인덱스 없이 1문서 조회
+  Future<String?> getMyActiveVoiceAlbumId() async {
+    final me = _auth.currentUser;
+    if (me == null) return null;
+
+    final snap = await _fs.collection('voiceSessions').doc(me.uid).get();
+    if (!snap.exists) return null;
+
+    final data = snap.data();
+    final albumId = data?['albumId'] as String?;
+    return (albumId != null && albumId.isNotEmpty) ? albumId : null;
   }
 }
 
@@ -132,7 +258,7 @@ class SharedAlbumListItem {
   factory SharedAlbumListItem.fromDoc(String id, Map<String, dynamic> d) {
     return SharedAlbumListItem(
       id: id,
-      name: (d['name'] ?? d['title'] ?? '') as String, // name 또는 title 호환
+      name: (d['name'] ?? d['title'] ?? '') as String,
       ownerUid: (d['ownerUid'] ?? '') as String,
       memberUids: List<String>.from((d['memberUids'] ?? const []) as List),
       photoCount: (d['photoCount'] ?? 0) as int,

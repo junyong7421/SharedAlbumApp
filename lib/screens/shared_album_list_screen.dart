@@ -2,7 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/shared_album_list_service.dart';
 
-// 만약 하단 커스텀 네비바를 쓰고 싶으면 주석 해제!
+// 팝업 / 오버레이
+import 'voice_call_popup.dart';
+import 'voice_call_overlay.dart';
+
+// 하단 커스텀 네비바
 import '../widgets/custom_bottom_nav_bar.dart';
 //0902
 import '../services/voice_rooms_service.dart';
@@ -24,7 +28,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
 
-      // 하단 네비게이션바 쓰는 경우 주석 해제
+      // 하단 네비게이션바
       bottomNavigationBar: const Padding(
         padding: EdgeInsets.only(bottom: 20, left: 20, right: 20),
         child: CustomBottomNavBar(selectedIndex: 1),
@@ -48,56 +52,6 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       fontWeight: FontWeight.bold,
                       color: Color(0xFF625F8C),
                     ),
-                  ),
-                  const Spacer(), // ✅ 오른쪽 정렬 0902
-                  IconButton(
-                    // ✅ 통화 버튼
-                    icon: const Icon(Icons.call, color: Color(0xFF625F8C)),
-                    onPressed: _onTapCall,
-                    tooltip: '보이스 방 참가',
-                  ),
-                  //0902
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),*/
-            // 헤더
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween, // ← 핵심
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // 왼쪽 영역(아바타 + 타이틀)을 Expanded로 감싸 폭 확보
-                  Expanded(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _buildUserAvatar(),
-                        const SizedBox(width: 10),
-                        const Flexible(
-                          child: Text(
-                            '공유앨범 목록 및 멤버관리',
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF625F8C),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // 오른쪽 통화 아이콘
-                  IconButton(
-                    iconSize: 26,
-                    splashRadius: 22,
-                    icon: const Icon(Icons.call, color: Color(0xFF625F8C)),
-                    onPressed: _onTapCall,
-                    tooltip: '보이스 방 참가',
                   ),
                 ],
               ),
@@ -224,15 +178,112 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
     );
   }
 
+  // -------------------- Actions --------------------
+
+  /// 전화 아이콘 탭
+  Future<void> _onTapCall() async {
+    try {
+      final me = FirebaseAuth.instance.currentUser;
+      if (me == null) return;
+
+      // A) 이미 접속 중인가? → 오버레이 보장 + 접속자 팝업
+      final activeAlbumId = await _svc.getMyActiveVoiceAlbumId();
+      if (activeAlbumId != null) {
+        // 앨범 이름
+        final myAlbums = await _svc.watchMySharedAlbums().first;
+        String albumName = '보이스톡';
+        for (final a in myAlbums) {
+          if (a.id == activeAlbumId) {
+            albumName = a.name;
+            break;
+          }
+        }
+
+        // 오버레이가 없으면 띄움
+        voiceOverlay.show(albumId: activeAlbumId, albumName: albumName);
+
+        // 접속자 팝업
+        final stream = _svc.watchVoiceParticipants(activeAlbumId).map(
+          (list) => list
+              .map((m) => MemberLite(
+                    uid: m.uid,
+                    name: m.name.isNotEmpty ? m.name : m.email,
+                  ))
+              .toList(),
+        );
+        final initial = await stream.first;
+
+        await showVoiceNowPopup(
+          context,
+          albumName: albumName,
+          initialParticipants: initial,
+          participantsStream: stream,
+          onLeave: () async {
+            await _svc.leaveVoice(albumId: activeAlbumId);
+            voiceOverlay.hide();
+          },
+        );
+        return;
+      }
+
+      // B) 접속 중이 아니면: 앨범 선택 → 입장 → 오버레이 → 접속자 팝업
+      final albums = await _svc.watchMySharedAlbums().first;
+      final albumLites =
+          albums.map((a) => AlbumLite(id: a.id, name: a.name)).toList();
+
+      final selectedAlbumId = await showAlbumSelectPopup(
+        context,
+        albums: albumLites,
+      );
+      if (selectedAlbumId == null) return;
+
+      final selectedAlbum =
+          albumLites.firstWhere((e) => e.id == selectedAlbumId);
+
+      await _svc.joinVoice(albumId: selectedAlbumId);
+
+      // 접속과 동시에 오버레이 표시
+      voiceOverlay.show(
+        albumId: selectedAlbumId,
+        albumName: selectedAlbum.name,
+      );
+
+      final stream = _svc.watchVoiceParticipants(selectedAlbumId).map(
+        (list) => list
+            .map((m) => MemberLite(
+                  uid: m.uid,
+                  name: m.name.isNotEmpty ? m.name : m.email,
+                ))
+            .toList(),
+      );
+      final initial = await stream.first;
+
+      await showVoiceNowPopup(
+        context,
+        albumName: selectedAlbum.name,
+        initialParticipants: initial,
+        participantsStream: stream,
+        onLeave: () async {
+          await _svc.leaveVoice(albumId: selectedAlbumId);
+          voiceOverlay.hide();
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('보이스톡 진입 실패: $e')),
+      );
+    }
+  }
+
   // 아바타
   Widget _buildUserAvatar() {
     final user = FirebaseAuth.instance.currentUser;
     final photo = user?.photoURL;
     return CircleAvatar(
       radius: 24,
-      backgroundImage: (photo != null && photo.isNotEmpty)
-          ? NetworkImage(photo)
-          : null,
+      backgroundImage:
+          (photo != null && photo.isNotEmpty) ? NetworkImage(photo) : null,
       backgroundColor: const Color(0xFFD9E2FF),
       child: (photo == null || photo.isEmpty)
           ? const Icon(Icons.person, color: Color(0xFF625F8C))
@@ -303,15 +354,15 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       if (selected != null && selected.isNotEmpty) {
         await _svc.addMembers(albumId, selected);
         if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('멤버가 추가되었습니다.')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('멤버가 추가되었습니다.')),
+        );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('추가 실패: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('추가 실패: $e')),
+      );
     }
   }
 
@@ -352,16 +403,14 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       final m = members[i];
                       return ListTile(
                         leading: CircleAvatar(
-                          backgroundImage:
-                              (m.photoUrl != null && m.photoUrl!.isNotEmpty)
+                          backgroundImage: (m.photoUrl != null &&
+                                  m.photoUrl!.isNotEmpty)
                               ? NetworkImage(m.photoUrl!)
                               : null,
                           backgroundColor: const Color(0xFFD9E2FF),
                           child: (m.photoUrl == null || m.photoUrl!.isEmpty)
-                              ? const Icon(
-                                  Icons.person,
-                                  color: Color(0xFF625F8C),
-                                )
+                              ? const Icon(Icons.person,
+                                  color: Color(0xFF625F8C))
                               : null,
                         ),
                         title: Text(
@@ -371,9 +420,8 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                         subtitle: m.name.isNotEmpty
                             ? Text(
                                 m.email,
-                                style: const TextStyle(
-                                  color: Color(0xFF625F8C),
-                                ),
+                                style:
+                                    const TextStyle(color: Color(0xFF625F8C)),
                               )
                             : null,
                       );
@@ -414,9 +462,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('불러오기 실패: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('불러오기 실패: $e')),
+      );
     }
   }
   //0902
@@ -532,8 +580,8 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
                         title: Text(f.name.isNotEmpty ? f.name : f.email),
                         subtitle: f.name.isNotEmpty ? Text(f.email) : null,
                         secondary: CircleAvatar(
-                          backgroundImage:
-                              (f.photoUrl != null && f.photoUrl!.isNotEmpty)
+                          backgroundImage: (f.photoUrl != null &&
+                                  f.photoUrl!.isNotEmpty)
                               ? NetworkImage(f.photoUrl!)
                               : null,
                           child: (f.photoUrl == null || f.photoUrl!.isEmpty)
