@@ -7,17 +7,17 @@ class EditViewScreen extends StatefulWidget {
   final String albumName; // 🔹 앨범 이름 추가
 
   const EditViewScreen({
-    Key? key,
+    super.key,
     required this.imagePath,
     required this.albumName, // 🔹 생성자에 추가
-  }) : super(key: key);
+  });
 
   @override
   State<EditViewScreen> createState() => _EditViewScreenState();
 }
 
 class _EditViewScreenState extends State<EditViewScreen> {
-  int _selectedIndex = 2;
+  final int _selectedIndex = 2;
   int _selectedTool = 0;
 
   final List<String> _iconPathsOn = [

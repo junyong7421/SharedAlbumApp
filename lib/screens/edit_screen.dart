@@ -7,7 +7,7 @@ import '../widgets/user_icon_button.dart';
 class EditScreen extends StatefulWidget {
   final String albumName;
 
-  const EditScreen({Key? key, required this.albumName}) : super(key: key);
+  const EditScreen({super.key, required this.albumName});
 
   @override
   State<EditScreen> createState() => _EditScreenState();
@@ -77,7 +77,6 @@ class _EditScreenState extends State<EditScreen> {
                 ),
 
                 const SizedBox(height: 20), // 🔹 간격 줄임
-
                 // ✅ 편집 목록 버튼
                 Align(
                   alignment: Alignment.centerLeft,
@@ -159,7 +158,7 @@ class _EditScreenState extends State<EditScreen> {
                           setState(() {
                             _currentIndex =
                                 (_currentIndex - 1 + _imagePaths.length) %
-                                    _imagePaths.length;
+                                _imagePaths.length;
                           });
                         },
                       ),

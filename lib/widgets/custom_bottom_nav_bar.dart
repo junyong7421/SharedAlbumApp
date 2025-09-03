@@ -7,7 +7,7 @@ import '../screens/friend_manage_screen.dart';
 class CustomBottomNavBar extends StatelessWidget {
   final int selectedIndex;
 
-  const CustomBottomNavBar({Key? key, required this.selectedIndex}) : super(key: key);
+  const CustomBottomNavBar({super.key, required this.selectedIndex});
 
   @override
   Widget build(BuildContext context) {
@@ -31,11 +31,7 @@ class CustomBottomNavBar extends StatelessWidget {
         color: const Color(0xFFF6F9FF),
         borderRadius: BorderRadius.circular(35),
         boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 6,
-            offset: Offset(2, 2),
-          ),
+          BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(2, 2)),
         ],
       ),
       child: Row(
@@ -47,10 +43,14 @@ class CustomBottomNavBar extends StatelessWidget {
 
               // 🔹 선택한 탭에 따라 다른 화면으로 이동
               Widget nextScreen;
-              if (index == 0) nextScreen = const SharedAlbumScreen();
-              else if (index == 1) nextScreen = const SharedAlbumListScreen();
-              else if (index == 2) nextScreen = const EditAlbumListScreen();
-              else nextScreen = const FriendManageScreen();
+              if (index == 0) {
+                nextScreen = const SharedAlbumScreen();
+              } else if (index == 1)
+                nextScreen = const SharedAlbumListScreen();
+              else if (index == 2)
+                nextScreen = const EditAlbumListScreen();
+              else
+                nextScreen = const FriendManageScreen();
 
               Navigator.pushReplacement(
                 context,

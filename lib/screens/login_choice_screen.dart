@@ -39,7 +39,7 @@ class LoginChoiceScreen extends StatelessWidget {
         if (text == 'Login') {
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (context) => const LoginScreen()),
+            MaterialPageRoute(builder: (context) => LoginScreen()),
           );
         } else if (text == 'Sign Up') {
           Navigator.push(
@@ -54,11 +54,7 @@ class LoginChoiceScreen extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
           gradient: const LinearGradient(
-            colors: [
-              Color(0xFFC6DCFF),
-              Color(0xFFD2D1FF),
-              Color(0xFFF5CFFF),
-            ],
+            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
           ),
         ),
         child: Center(

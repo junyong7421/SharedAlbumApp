@@ -25,7 +25,9 @@ class AddMemberPopup extends StatelessWidget {
       'friend10@email.com',*/
     ];
 
-    final filteredFriends = friends.where((f) => f != currentUserEmail).toList();
+    final filteredFriends = friends
+        .where((f) => f != currentUserEmail)
+        .toList();
 
     return Dialog(
       backgroundColor: const Color(0xFFF6F9FF),
@@ -68,7 +70,7 @@ class AddMemberPopup extends StatelessWidget {
                   Navigator.pop(context);
                 }),
               ],
-            )
+            ),
           ],
         ),
       ),
