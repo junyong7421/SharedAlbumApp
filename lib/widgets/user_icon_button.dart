@@ -1,8 +1,31 @@
 import 'package:flutter/material.dart';
 import '../screens/login_choice_screen.dart';
 
+// [변경] Firebase/GoogleSignIn 추가
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+
 class UserIconButton extends StatelessWidget {
   const UserIconButton({super.key});
+
+  // [변경] 완전 로그아웃 함수: Firebase + Google 세션 해제
+  Future<void> _signOutCompletely() async {
+    try {
+      // FirebaseAuth 로그아웃
+      await FirebaseAuth.instance.signOut();
+
+      // GoogleSignIn 연결 해제 및 로그아웃
+      final g = GoogleSignIn();
+      try {
+        await g.disconnect(); // 토큰 revoke
+      } catch (_) {
+        // 이미 연결이 없을 수 있어 무시
+      }
+      await g.signOut();
+    } catch (e) {
+      debugPrint('로그아웃 실패: $e');
+    }
+  }
 
   void _showLogoutDialog(BuildContext context) {
     showDialog(
@@ -40,14 +63,18 @@ class UserIconButton extends StatelessWidget {
                     _buildGradientActionButton("취소", () {
                       Navigator.pop(context);
                     }),
-                    _buildGradientActionButton("확인", () {
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const LoginChoiceScreen(),
-                        ),
-                        (route) => false,
-                      );
+                    // [변경] 확인: 완전 로그아웃 후 로그인 화면으로 이동
+                    _buildGradientActionButton("확인", () async {
+                      await _signOutCompletely(); // [변경]
+                      if (context.mounted) {
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const LoginChoiceScreen(),
+                          ),
+                          (route) => false,
+                        );
+                      }
                     }),
                   ],
                 ),
