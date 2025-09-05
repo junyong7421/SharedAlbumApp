@@ -1,5 +1,10 @@
+// lib/screens/edit_view_screen.dart
+import 'dart:typed_data';                          // [변경] PNG 바이트 추출
+import 'dart:ui' as ui;                            // [변경] ui.Image
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';           // [변경] RenderRepaintBoundary
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart'; // [변경] 직접 업로드
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import '../services/shared_album_service.dart';
@@ -10,17 +15,21 @@ class EditViewScreen extends StatefulWidget {
   final String? albumId;        // 저장/편집상태 해제에 사용
   final String? imagePath;      // 단일 이미지 표시
 
-  // ✅ 추가: 덮어쓰기/출처 추적용 (둘 다 옵션)
-  final String? editedId;       // 편집본에서 "다시 편집"으로 들어온 경우 사용(덮어쓰기 대상)
-  final String? originalPhotoId; // 원본 사진에서 편집 시작한 경우, 편집본에 원본을 기록
+  // 덮어쓰기/출처 추적 (옵션)
+  final String? editedId;        // 편집본 재편집 → 덮어쓰기 대상
+  final String? originalPhotoId; // 원본에서 편집 시작 → 원본 추적용
+
+  // 저장 경로 안정화를 위한 photoId (있으면 버전 경로 키로 사용)
+  final String? photoId;         // 예: 원본 photoId
 
   const EditViewScreen({
     super.key,
     required this.albumName,
     this.albumId,
     this.imagePath,
-    this.editedId,        // ⬅ 추가
-    this.originalPhotoId, // ⬅ 추가
+    this.editedId,
+    this.originalPhotoId,
+    this.photoId,
   }) : assert(
           albumId != null || imagePath != null,
           'albumId 또는 imagePath 중 하나는 반드시 필요합니다.',
@@ -37,8 +46,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
   final _svc = SharedAlbumService.instance;
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
 
-  // 단일 미리보기만 사용
-  bool get _useStream => false;
+  // [변경] 캡처 대상 키(편집 스테이지 전체를 감쌈)
+  final GlobalKey _captureKey = GlobalKey();
 
   final List<IconData> _toolbarIcons = const [
     Icons.mouse,
@@ -50,55 +59,102 @@ class _EditViewScreenState extends State<EditViewScreen> {
     Icons.widgets,
   ];
 
-  // === 저장 처리 ===
+  // =======================
+  // [변경] 저장 핵심 로직
+  // =======================
+
+  // [변경] RepaintBoundary → PNG 바이트 추출
+  Future<Uint8List> _exportEditedImageBytes() async {
+    final boundary = _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+    if (boundary == null) {
+      throw StateError('캡처 대상을 찾지 못했습니다.');
+    }
+    final ui.Image image = await boundary.toImage(pixelRatio: 2.5); // 해상도 조절
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) {
+      throw StateError('PNG 인코딩에 실패했습니다.');
+    }
+    return byteData.buffer.asUint8List();
+  }
+
+  // [변경] PNG 바이트를 Storage `edited/*` 경로에 업로드
+  Future<({String url, String storagePath})> _uploadEditedPngBytes(Uint8List png) async {
+    if (widget.albumId == null) {
+      throw StateError('albumId가 없습니다.');
+    }
+    // 경로 키: photoId > originalPhotoId > editedId > 내 uid
+    final photoKey = widget.photoId ?? widget.originalPhotoId ?? widget.editedId ?? _uid;
+    final storagePath = _svc.generateEditedStoragePath(
+      albumId: widget.albumId!,
+      photoId: photoKey,
+      ext: 'png',
+    );
+    final ref = FirebaseStorage.instance.ref(storagePath);
+    await ref.putData(png, SettableMetadata(contentType: 'image/png'));
+    final url = await ref.getDownloadURL();
+    return (url: url, storagePath: storagePath);
+  }
+
+  // [변경] 저장 처리: 항상 캡처→업로드→문서 갱신
   Future<void> _onSave() async {
-    // 필수 값 확인
-    if (widget.albumId == null || widget.imagePath == null) {
+    if (widget.albumId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('저장할 수 없습니다 (필수 정보 부족).')),
+        const SnackBar(content: Text('저장할 수 없습니다 (albumId가 없습니다).')),
       );
       return;
     }
 
     try {
-      // 🔹 1) 편집본 재편집 → 덮어쓰기
-      if (widget.editedId != null && widget.editedId!.isNotEmpty) {
+      // 1) 현재 편집 화면 캡처
+      final png = await _exportEditedImageBytes();
+
+      // 2) edited/* 경로로 업로드
+      final uploaded = await _uploadEditedPngBytes(png);
+
+      // 3) 저장 분기
+      if ((widget.editedId ?? '').isNotEmpty) {
+        // 편집본 재편집 → 덮어쓰기 + 이전 파일 정리
         await _svc.saveEditedPhotoOverwrite(
           albumId: widget.albumId!,
-          editedId: widget.editedId!,   // 이 문서의 url을 새 결과로 교체
-          newUrl: widget.imagePath!,    // 실제 앱에서는 편집 결과물 URL을 넣으세요
+          editedId: widget.editedId!,
+          newUrl: uploaded.url,
+          newStoragePath: uploaded.storagePath,
           editorUid: _uid,
+          deleteOld: true,
         );
-      }
-      // 🔹 2) 원본 → 새 편집본 생성(원본 추적 포함)
-      else if (widget.originalPhotoId != null &&
-          widget.originalPhotoId!.isNotEmpty) {
+      } else if ((widget.originalPhotoId ?? '').isNotEmpty) {
+        // 원본에서 신규 편집본 생성(원본 추적)
         await _svc.saveEditedPhotoFromUrl(
           albumId: widget.albumId!,
           editorUid: _uid,
-          originalPhotoId: widget.originalPhotoId!, // 원본 id 기록
-          editedUrl: widget.imagePath!,             // 결과물 URL
+          originalPhotoId: widget.originalPhotoId!,
+          editedUrl: uploaded.url,
+          storagePath: uploaded.storagePath,
         );
-      }
-      // 🔹 3) 예외/호환: originalPhotoId가 없을 때 최소 저장
-      else {
+      } else {
+        // 예외/호환: 원본 id 없으면 최소 저장
         await _svc.saveEditedPhoto(
           albumId: widget.albumId!,
-          url: widget.imagePath!,
+          url: uploaded.url,
           editorUid: _uid,
+          storagePath: uploaded.storagePath,
         );
       }
 
-      // 편집중 상태 해제
-      if (widget.albumId != null) {
-        await _svc.clearEditing(uid: _uid, albumId: widget.albumId!);
-      }
+      // 4) (선택) 내 편집 상태 해제 + 잠금 해제
+      try {
+        await _svc.clearEditing(
+          uid: _uid,
+          albumId: widget.albumId!,
+          editedId: widget.editedId, // 있으면 잠금 해제
+        );
+      } catch (_) {}
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('편집이 저장되었습니다.')),
       );
-      Navigator.pop(context); // 이전 화면으로 복귀
+      Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -106,6 +162,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
       );
     }
   }
+
+  // =======================
+  // UI
+  // =======================
 
   // [변경] 앨범 이름과 동일한 스타일의 그라데이션 필 버튼
   Widget _gradientPillButton({
@@ -119,23 +179,13 @@ class _EditViewScreenState extends State<EditViewScreen> {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
           gradient: const LinearGradient(
-            colors: [
-              Color(0xFFC6DCFF),
-              Color(0xFFD2D1FF),
-              Color(0xFFF5CFFF),
-            ],
+            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
           ),
-          boxShadow: const [
-            BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(1, 1)),
-          ],
+          boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(1, 1))],
         ),
-        child: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-          ),
+        child: const Text(
+          '저장',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white),
         ),
       ),
     );
@@ -156,86 +206,58 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      // 뒤로가기: 저장 전엔 편집중 유지 (clearEditing 호출 안 함)
                       GestureDetector(
                         onTap: () => Navigator.pop(context),
-                        child: const Icon(
-                          Icons.arrow_back_ios,
-                          color: Color(0xFF625F8C),
-                          size: 24,
-                        ),
+                        child: const Icon(Icons.arrow_back_ios, color: Color(0xFF625F8C), size: 24),
                       ),
                       const SizedBox(width: 8),
                       const UserIconButton(),
                       const SizedBox(width: 10),
                       const Text(
                         '편집',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF625F8C),
-                        ),
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF625F8C)),
                       ),
                       const Spacer(),
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(16),
                           gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFFC6DCFF),
-                              Color(0xFFD2D1FF),
-                              Color(0xFFF5CFFF),
-                            ],
+                            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
                           ),
                         ),
                         child: Text(
                           widget.albumName,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white),
                         ),
                       ),
                     ],
                   ),
                 ),
 
-                // [변경] 저장 버튼: 상단 바 바로 아래, 오른쪽 정렬 + 동일 그라데이션
+                // [변경] 저장 버튼: 상단 바 바로 아래, 오른쪽 정렬
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Row(
-                    children: [
-                      const Spacer(),
-                      _gradientPillButton(label: '저장', onTap: _onSave),
-                    ],
-                  ),
+                  child: Row(children: [const Spacer(), _gradientPillButton(label: '저장', onTap: _onSave)]),
                 ),
 
                 const SizedBox(height: 12),
 
-                // 미리보기 (화면의 55% 높이) - 단일 이미지만
+                // [변경] 캡처 대상: 편집 스테이지 전체를 RepaintBoundary로 감쌈
                 Container(
                   height: MediaQuery.of(context).size.height * 0.55,
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   decoration: BoxDecoration(
                     color: Colors.transparent,
                     borderRadius: BorderRadius.circular(20),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 6,
-                        offset: Offset(2, 2),
-                      ),
-                    ],
+                    boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(2, 2))],
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(20),
-                    child: _buildSinglePreview(widget.imagePath!),
+                    child: RepaintBoundary(                    // [변경]
+                      key: _captureKey,                        // [변경]
+                      child: _buildEditableStage(),            // [변경]
+                    ),
                   ),
                 ),
 
@@ -278,8 +300,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
               ],
             ),
 
-            // 하단 네비게이션 바 + 저장 버튼
-            // [변경] 하단의 기존 저장 버튼 제거, 네비만 유지
+            // 하단 네비게이션 바
             Positioned(
               bottom: 20,
               left: 20,
@@ -292,7 +313,19 @@ class _EditViewScreenState extends State<EditViewScreen> {
     );
   }
 
-  // === 단일 이미지 프리뷰 ===
+  // [변경] 편집 스테이지: 현재는 이미지만, 추후 텍스트/스티커/도형 위젯을 Stack으로 추가하면 저장에 그대로 반영됨
+  Widget _buildEditableStage() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (widget.imagePath != null) _buildSinglePreview(widget.imagePath!),
+        // TODO: 선택된 툴(_selectedTool)에 따라 텍스트/스티커/도형 등을 이 위에 올리면,
+        //       저장 시 RepaintBoundary 캡처에 자동으로 합성됩니다.  // [변경]
+      ],
+    );
+  }
+
+  // 단일 이미지 프리뷰
   Widget _buildSinglePreview(String path) {
     final isUrl = path.startsWith('http');
     if (isUrl) {
@@ -303,15 +336,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
         height: double.infinity,
         loadingBuilder: (c, child, progress) {
           if (progress == null) return child;
-          return const Center(
-            child: CircularProgressIndicator(color: Color(0xFF625F8C)),
-          );
+          return const Center(child: CircularProgressIndicator(color: Color(0xFF625F8C)));
         },
         errorBuilder: (_, __, ___) => const Center(
-          child: Text(
-            '이미지를 불러오지 못했습니다',
-            style: TextStyle(color: Color(0xFF625F8C)),
-          ),
+          child: Text('이미지를 불러오지 못했습니다', style: TextStyle(color: Color(0xFF625F8C))),
         ),
       );
     } else {

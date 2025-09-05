@@ -50,18 +50,11 @@ class _EditScreenState extends State<EditScreen> {
                       ),
                       const Spacer(),
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(16),
                           gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFFC6DCFF),
-                              Color(0xFFD2D1FF),
-                              Color(0xFFF5CFFF),
-                            ],
+                            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
                           ),
                         ),
                         child: Text(
@@ -86,33 +79,21 @@ class _EditScreenState extends State<EditScreen> {
                     onTap: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => const EditAlbumListScreen(),
-                        ),
+                        MaterialPageRoute(builder: (context) => const EditAlbumListScreen()),
                       );
                     },
                     child: Container(
                       margin: const EdgeInsets.only(left: 24, bottom: 12),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 6,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(16),
                         gradient: const LinearGradient(
-                          colors: [
-                            Color(0xFFC6DCFF),
-                            Color(0xFFD2D1FF),
-                            Color(0xFFF5CFFF),
-                          ],
+                          colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
                         ),
                       ),
                       child: const Text(
                         '편집 목록',
-                        style: TextStyle(
-                          color: Color(0xFFF6F9FF),
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style: TextStyle(color: Color(0xFFF6F9FF), fontWeight: FontWeight.bold),
                       ),
                     ),
                   ),
@@ -123,32 +104,22 @@ class _EditScreenState extends State<EditScreen> {
                   alignment: Alignment.centerLeft,
                   child: Container(
                     margin: const EdgeInsets.only(left: 24, bottom: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 6,
-                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(16),
                       gradient: const LinearGradient(
-                        colors: [
-                          Color(0xFFC6DCFF),
-                          Color(0xFFD2D1FF),
-                          Color(0xFFF5CFFF),
-                        ],
+                        colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
                       ),
                     ),
                     child: const Text(
                       '편집 중인 사진',
-                      style: TextStyle(
-                        color: Color(0xFFF6F9FF),
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: TextStyle(color: Color(0xFFF6F9FF), fontWeight: FontWeight.bold),
                     ),
                   ),
                 ),
                 const SizedBox(height: 12),
 
-                // 🔹 앨범 전체 편집중 목록 실시간 구독
+                // 앨범 전체 편집중 목록 실시간 구독
                 StreamBuilder<List<EditingInfo>>(
                   stream: _svc.watchEditingForAlbum(widget.albumId),
                   builder: (context, snap) {
@@ -156,15 +127,15 @@ class _EditScreenState extends State<EditScreen> {
                     final hasImages = list.isNotEmpty;
 
                     if (hasImages) {
-                      _currentIndex %= list.length;
+                      _currentIndex = _currentIndex % list.length;
                       if (_currentIndex < 0) _currentIndex = 0;
                     } else {
                       _currentIndex = 0;
                     }
 
-                    final String? url = hasImages
-                        ? list[_currentIndex].photoUrl
-                        : null;
+                    final EditingInfo? current = hasImages ? list[_currentIndex] : null;
+                    final String? url = current?.photoUrl;
+                    final String? photoId = current?.photoId;
 
                     // === 화살표 + 중앙 사진 ===
                     final preview = Center(
@@ -175,28 +146,41 @@ class _EditScreenState extends State<EditScreen> {
                             icon: const Icon(Icons.arrow_left, size: 32),
                             onPressed: hasImages
                                 ? () => setState(() {
-                                    _currentIndex =
-                                        (_currentIndex - 1 + list.length) %
-                                        list.length;
-                                  })
+                                      _currentIndex = (_currentIndex - 1 + list.length) % list.length;
+                                    })
                                 : null,
                             color: hasImages ? null : Colors.black26,
                           ),
                           const SizedBox(width: 8),
                           GestureDetector(
                             onTap: hasImages
-                                ? () {
+                                ? () async {
+                                    // ✅ [변경] 진입 전에 내 편집 세션 생성(공동 편집 가시성/락)
+                                    try {
+                                      await _svc.setEditing(
+                                        uid: _uid,
+                                        albumId: widget.albumId,
+                                        photoUrl: url!, // 현재 보여주는 이미지
+                                        source: (current?.editedId ?? '').isNotEmpty
+                                            ? 'edited'
+                                            : 'original', // ✅ [변경] null-safe
+                                        editedId: current?.editedId, // ✅ [변경] null-safe
+                                        originalPhotoId: current?.originalPhotoId ?? current?.photoId, // ✅ [변경]
+                                      );
+                                    } catch (_) {}
+
+                                    // ✅ [변경] photoId도 함께 전달(있으면)
+                                    if (!mounted) return;
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => EditViewScreen(
-                                          imagePath: url!,
                                           albumName: widget.albumName,
                                           albumId: widget.albumId,
-                                          editedId: list[_currentIndex]
-                                              .editedId, // 편집본에서 온 경우 덮어쓰기 대상
-                                          originalPhotoId: list[_currentIndex]
-                                              .originalPhotoId, // 원본에서 온 경우 추적용
+                                          imagePath: url!,
+                                          editedId: current?.editedId, // ✅ [변경] null-safe
+                                          originalPhotoId: current?.originalPhotoId, // ✅ [변경] null-safe
+                                          photoId: photoId, // ✅ [변경]
                                         ),
                                       ),
                                     );
@@ -210,17 +194,17 @@ class _EditScreenState extends State<EditScreen> {
                                 color: const Color(0xFFF6F9FF),
                                 borderRadius: BorderRadius.circular(20),
                                 boxShadow: const [
-                                  BoxShadow(
-                                    color: Colors.black12,
-                                    blurRadius: 5,
-                                    offset: Offset(2, 2),
-                                  ),
+                                  BoxShadow(color: Colors.black12, blurRadius: 5, offset: Offset(2, 2)),
                                 ],
                               ),
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(12),
                                 child: hasImages
-                                    ? Image.network(url!, fit: BoxFit.cover)
+                                    ? Image.network(
+                                        url!,
+                                        fit: BoxFit.cover,
+                                        key: ValueKey('${photoId ?? url}'), // ✅ [변경] 캐시 꼬임 방지
+                                      )
                                     : _emptyPreview(),
                               ),
                             ),
@@ -230,9 +214,8 @@ class _EditScreenState extends State<EditScreen> {
                             icon: const Icon(Icons.arrow_right, size: 32),
                             onPressed: hasImages
                                 ? () => setState(() {
-                                    _currentIndex =
-                                        (_currentIndex + 1) % list.length;
-                                  })
+                                      _currentIndex = (_currentIndex + 1) % list.length;
+                                    })
                                 : null,
                             color: hasImages ? null : Colors.black26,
                           ),
@@ -250,36 +233,23 @@ class _EditScreenState extends State<EditScreen> {
                           Align(
                             alignment: Alignment.centerLeft,
                             child: Container(
-                              margin: const EdgeInsets.only(
-                                left: 24,
-                                bottom: 8,
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 6,
-                              ),
+                              margin: const EdgeInsets.only(left: 24, bottom: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(16),
                                 gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFFC6DCFF),
-                                    Color(0xFFD2D1FF),
-                                    Color(0xFFF5CFFF),
-                                  ],
+                                  colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
                                 ),
                               ),
                               child: const Text(
                                 '편집된 사진',
-                                style: TextStyle(
-                                  color: Color(0xFFF6F9FF),
-                                  fontWeight: FontWeight.bold,
-                                ),
+                                style: TextStyle(color: Color(0xFFF6F9FF), fontWeight: FontWeight.bold),
                               ),
                             ),
                           ),
                           const SizedBox(height: 12),
 
-                          // ⬇ 저장된 편집본만 들어가는 흰 박스
+                          // 저장된 편집본 목록
                           Center(
                             child: Container(
                               width: 300,
@@ -288,22 +258,15 @@ class _EditScreenState extends State<EditScreen> {
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(20),
                                 boxShadow: const [
-                                  BoxShadow(
-                                    color: Colors.black12,
-                                    blurRadius: 4,
-                                    offset: Offset(2, 2),
-                                  ),
+                                  BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(2, 2)),
                                 ],
                               ),
                               child: StreamBuilder<List<EditedPhoto>>(
                                 stream: _svc.watchEditedPhotos(widget.albumId),
                                 builder: (context, snap2) {
-                                  if (snap2.connectionState ==
-                                      ConnectionState.waiting) {
+                                  if (snap2.connectionState == ConnectionState.waiting) {
                                     return const Center(
-                                      child: CircularProgressIndicator(
-                                        color: Color(0xFF625F8C),
-                                      ),
+                                      child: CircularProgressIndicator(color: Color(0xFF625F8C)),
                                     );
                                   }
                                   if (snap2.hasError) {
@@ -313,24 +276,18 @@ class _EditScreenState extends State<EditScreen> {
                                         child: Text(
                                           '편집된 사진을 불러오는 중 오류가 발생했습니다.\n${snap2.error}',
                                           textAlign: TextAlign.center,
-                                          style: const TextStyle(
-                                            color: Color(0xFF625F8C),
-                                          ),
+                                          style: const TextStyle(color: Color(0xFF625F8C)),
                                         ),
                                       ),
                                     );
                                   }
 
-                                  final edited =
-                                      snap2.data ?? const <EditedPhoto>[];
+                                  final edited = snap2.data ?? const <EditedPhoto>[];
                                   if (edited.isEmpty) {
                                     return const Center(
                                       child: Text(
                                         '편집된 사진이 없습니다',
-                                        style: TextStyle(
-                                          color: Color(0xFF625F8C),
-                                          fontWeight: FontWeight.w500,
-                                        ),
+                                        style: TextStyle(color: Color(0xFF625F8C), fontWeight: FontWeight.w500),
                                       ),
                                     );
                                   }
@@ -338,23 +295,20 @@ class _EditScreenState extends State<EditScreen> {
                                   return ListView.separated(
                                     scrollDirection: Axis.horizontal,
                                     padding: const EdgeInsets.all(12),
-                                    separatorBuilder: (_, __) =>
-                                        const SizedBox(width: 8),
+                                    separatorBuilder: (_, __) => const SizedBox(width: 8),
                                     itemCount: edited.length,
                                     itemBuilder: (_, i) {
                                       final it = edited[i];
                                       return GestureDetector(
-                                        onTap: () =>
-                                            _showEditedActions(context, it),
+                                        onTap: () => _showEditedActions(context, it),
                                         child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(
-                                            12,
-                                          ),
+                                          borderRadius: BorderRadius.circular(12),
                                           child: Image.network(
                                             it.url,
                                             width: 100,
                                             height: 100,
                                             fit: BoxFit.cover,
+                                            key: ValueKey(it.id), // ✅ [변경]
                                           ),
                                         ),
                                       );
@@ -370,8 +324,7 @@ class _EditScreenState extends State<EditScreen> {
                   },
                 ),
 
-                // 바텀바 침범 방지 여백
-                const SizedBox(height: 110),
+                const SizedBox(height: 110), // 바텀바 침범 방지
               ],
             ),
 
@@ -388,17 +341,13 @@ class _EditScreenState extends State<EditScreen> {
     );
   }
 
-  // 빈 상태 위젯들
   Widget _emptyPreview() {
     return Container(
       color: const Color(0xFFF0F3FF),
       child: const Center(
         child: Text(
           '편집 중인 사진 없음',
-          style: TextStyle(
-            color: Color(0xFF625F8C),
-            fontWeight: FontWeight.w600,
-          ),
+          style: TextStyle(color: Color(0xFF625F8C), fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -422,22 +371,21 @@ class _EditScreenState extends State<EditScreen> {
                 onTap: () async {
                   Navigator.pop(context);
 
-                  // ✅ 변경된 setEditing 시그니처에 맞게 호출
+                  // ✅ [변경] 편집 세션 등록 (편집본에서 재편집 시작)
                   try {
                     await _svc.setEditing(
                       uid: _uid,
                       albumId: widget.albumId,
                       photoUrl: item.url,
-                      source: 'edited', // 편집본에서 재편집 시작
-                      editedId: item.id, // 어떤 편집본인지
-                      // 원본 photoId가 있다면 같이 넘김(없으면 null)
+                      source: 'edited',
+                      editedId: item.id,
                       originalPhotoId: ((item.originalPhotoId ?? '').isNotEmpty)
                           ? item.originalPhotoId
                           : null,
                     );
                   } catch (_) {}
 
-                  // 편집 화면으로 이동 (덮어쓰기 모드 지원 시 editedId 전달)
+                  // 편집 화면으로 이동 (덮어쓰기 모드)
                   if (!mounted) return;
                   Navigator.push(
                     context,
@@ -446,8 +394,8 @@ class _EditScreenState extends State<EditScreen> {
                         albumName: widget.albumName,
                         albumId: widget.albumId,
                         imagePath: item.url,
-                        // EditViewScreen에 optional editedId 파라미터가 있다고 가정
                         editedId: item.id,
+                        // photoId는 EditedPhoto 모델에 없으므로 생략
                       ),
                     ),
                   );
@@ -464,14 +412,12 @@ class _EditScreenState extends State<EditScreen> {
                       editedId: item.id,
                     );
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('편집된 사진을 삭제했습니다.')),
-                    );
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(const SnackBar(content: Text('편집된 사진을 삭제했습니다.')));
                   } catch (e) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
                   }
                 },
               ),
