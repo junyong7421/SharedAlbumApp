@@ -491,11 +491,19 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
             IconButton(
               icon: const Icon(Icons.arrow_back, color: Color(0xFF625F8C)),
               onPressed: () {
-                setState(() {
-                  _selectedAlbumId = null;
-                  _selectedAlbumTitle = null;
-                  _selectedImageIndex = null;
-                });
+                if (_selectedImageIndex != null) {
+                  // 단일 사진 보기 중이면 → 그리드로만 복귀
+                  setState(() {
+                    _selectedImageIndex = null;
+                  });
+                } else {
+                  // 그리드(앨범 상세)면 → 앨범 목록으로 복귀
+                  setState(() {
+                    _selectedAlbumId = null;
+                    _selectedAlbumTitle = null;
+                    _selectedImageIndex = null;
+                  });
+                }
               },
             ),
             const SizedBox(width: 8),
@@ -604,13 +612,24 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 GestureDetector(
-                                  onTap: () {
+                                  onTap: () async {
+                                    // 1. 편집 상태 Firestore에 저장
+                                    await _svc.setEditing(
+                                      uid: _uid,
+                                      albumId: albumId,
+                                      photoUrl: p.url,
+                                      source: 'photos', // 원본에서 편집 시작
+                                      originalPhotoId: p.id, // 원본 photoId 전달
+                                    );
+                                    // 2. 편집 화면으로 이동
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => EditViewScreen(
+                                          albumName: title,
+                                          albumId: albumId, // 저장/덮어쓰기 시 필요
                                           imagePath: p.url,
-                                          albumName: albumId, // 필요 시 실제 이름으로 변경
+                                          originalPhotoId: p.id,
                                         ),
                                       ),
                                     );
