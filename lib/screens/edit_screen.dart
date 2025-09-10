@@ -1,3 +1,4 @@
+// lib/screens/edit_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'edit_view_screen.dart';
@@ -21,6 +22,9 @@ class _EditScreenState extends State<EditScreen> {
 
   final _svc = SharedAlbumService.instance;
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
+
+  // 빠른 연타/중복 진입 가드
+  bool _isNavigating = false;
 
   @override
   Widget build(BuildContext context) {
@@ -137,7 +141,17 @@ class _EditScreenState extends State<EditScreen> {
                     final String? url = current?.photoUrl;
                     final String? photoId = current?.photoId;
 
-                    // === 화살표 + 중앙 사진 ===
+                    // 현재 프리뷰 이미지의 고유 키 (재사용/캐시 충돌 방지)
+                    final String imageKey = [
+                      'editing',
+                      current?.source ?? 'original',
+                      current?.editedId ?? '',
+                      current?.originalPhotoId ?? '',
+                      current?.photoId ?? '',
+                      current?.photoUrl ?? '',
+                    ].join('_');
+
+                    // 화살표 + 중앙 사진
                     final preview = Center(
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -155,35 +169,63 @@ class _EditScreenState extends State<EditScreen> {
                           GestureDetector(
                             onTap: hasImages
                                 ? () async {
-                                    // ✅ [변경] 진입 전에 내 편집 세션 생성(공동 편집 가시성/락)
+                                    // 중복 진입 가드
+                                    if (_isNavigating) return;
+                                    _isNavigating = true;
+
+                                    // 현재 항목 로컬 변수로 캡처
+                                    final String? _editedId = current?.editedId;
+                                    final String? _originalPhotoId = current?.originalPhotoId;
+                                    final String? _photoId = photoId;
+                                    final String? _url = url;
+
+                                    if (_url == null || _url.isEmpty) {
+                                      _isNavigating = false;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(content: Text('이미지 URL이 유효하지 않습니다.')),
+                                      );
+                                      return;
+                                    }
+
                                     try {
                                       await _svc.setEditing(
                                         uid: _uid,
                                         albumId: widget.albumId,
-                                        photoUrl: url!, // 현재 보여주는 이미지
-                                        source: (current?.editedId ?? '').isNotEmpty
-                                            ? 'edited'
-                                            : 'original', // ✅ [변경] null-safe
-                                        editedId: current?.editedId, // ✅ [변경] null-safe
-                                        originalPhotoId: current?.originalPhotoId ?? current?.photoId, // ✅ [변경]
+                                        photoUrl: _url,
+                                        source: (_editedId ?? '').isNotEmpty ? 'edited' : 'original',
+                                        editedId: _editedId,
+                                        originalPhotoId: _originalPhotoId ?? _photoId,
                                       );
-                                    } catch (_) {}
+                                    } catch (e) {
+                                      _isNavigating = false;
+                                      if (!mounted) return;
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(content: Text('편집 세션 생성 실패: $e')),
+                                      );
+                                      return;
+                                    }
 
-                                    // ✅ [변경] photoId도 함께 전달(있으면)
-                                    if (!mounted) return;
-                                    Navigator.push(
+                                    if (!mounted) {
+                                      _isNavigating = false;
+                                      return;
+                                    }
+
+                                    // 편집 화면으로 이동 (세션 생성에 성공했을 때만)
+                                    await Navigator.push(
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => EditViewScreen(
                                           albumName: widget.albumName,
                                           albumId: widget.albumId,
-                                          imagePath: url!,
-                                          editedId: current?.editedId, // ✅ [변경] null-safe
-                                          originalPhotoId: current?.originalPhotoId, // ✅ [변경] null-safe
-                                          photoId: photoId, // ✅ [변경]
+                                          imagePath: _url,
+                                          editedId: _editedId,
+                                          originalPhotoId: _originalPhotoId,
+                                          photoId: _photoId,
                                         ),
                                       ),
                                     );
+
+                                    _isNavigating = false;
                                   }
                                 : null,
                             child: Container(
@@ -203,7 +245,8 @@ class _EditScreenState extends State<EditScreen> {
                                     ? Image.network(
                                         url!,
                                         fit: BoxFit.cover,
-                                        key: ValueKey('${photoId ?? url}'), // ✅ [변경] 캐시 꼬임 방지
+                                        key: ValueKey(imageKey), // 고유 키
+                                        gaplessPlayback: true,   // 전환 시 깜빡임/뒤바뀜 방지
                                       )
                                     : _emptyPreview(),
                               ),
@@ -229,7 +272,7 @@ class _EditScreenState extends State<EditScreen> {
                           preview,
                           const SizedBox(height: 30),
 
-                          // ====== 편집된 사진 (edited/*) ======
+                          // 편집된 사진 (edited/*)
                           Align(
                             alignment: Alignment.centerLeft,
                             child: Container(
@@ -299,6 +342,9 @@ class _EditScreenState extends State<EditScreen> {
                                     itemCount: edited.length,
                                     itemBuilder: (_, i) {
                                       final it = edited[i];
+
+                                      final thumbKey = 'edited_${it.id}_${it.originalPhotoId ?? ''}_${it.url}';
+
                                       return GestureDetector(
                                         onTap: () => _showEditedActions(context, it),
                                         child: ClipRRect(
@@ -308,7 +354,8 @@ class _EditScreenState extends State<EditScreen> {
                                             width: 100,
                                             height: 100,
                                             fit: BoxFit.cover,
-                                            key: ValueKey(it.id), // ✅ [변경]
+                                            key: ValueKey(thumbKey), // 고유 키
+                                            gaplessPlayback: true,
                                           ),
                                         ),
                                       );
@@ -353,7 +400,7 @@ class _EditScreenState extends State<EditScreen> {
     );
   }
 
-  // === 하단 액션: 편집된 사진 탭 시 ===
+  // 하단 액션: 편집된 사진 탭 시
   void _showEditedActions(BuildContext context, EditedPhoto item) {
     showModalBottomSheet(
       context: context,
@@ -371,7 +418,11 @@ class _EditScreenState extends State<EditScreen> {
                 onTap: () async {
                   Navigator.pop(context);
 
-                  // ✅ [변경] 편집 세션 등록 (편집본에서 재편집 시작)
+                  // 중복 진입 가드
+                  if (_isNavigating) return;
+                  _isNavigating = true;
+
+                  // 편집 세션 등록 (편집본에서 재편집 시작)
                   try {
                     await _svc.setEditing(
                       uid: _uid,
@@ -383,11 +434,22 @@ class _EditScreenState extends State<EditScreen> {
                           ? item.originalPhotoId
                           : null,
                     );
-                  } catch (_) {}
+                  } catch (e) {
+                    _isNavigating = false;
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('편집 세션 생성 실패: $e')),
+                    );
+                    return;
+                  }
+
+                  if (!mounted) {
+                    _isNavigating = false;
+                    return;
+                  }
 
                   // 편집 화면으로 이동 (덮어쓰기 모드)
-                  if (!mounted) return;
-                  Navigator.push(
+                  await Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (_) => EditViewScreen(
@@ -395,10 +457,11 @@ class _EditScreenState extends State<EditScreen> {
                         albumId: widget.albumId,
                         imagePath: item.url,
                         editedId: item.id,
-                        // photoId는 EditedPhoto 모델에 없으므로 생략
                       ),
                     ),
                   );
+
+                  _isNavigating = false;
                 },
               ),
               ListTile(

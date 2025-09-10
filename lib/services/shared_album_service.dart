@@ -251,7 +251,7 @@ class SharedAlbumService {
   }
 
   // ===== 내부: edited 잠금/해제 =====
-
+  // (동시 편집 허용 정책으로, 아래 락 API는 선택적/수동 사용만 가능)
   Future<void> _lockEdited({
     required String albumId,
     required String editedId,
@@ -314,10 +314,7 @@ class SharedAlbumService {
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // 편집본에서 시작이면 해당 edited 문서 잠금
-    if (source == 'edited' && editedId != null) {
-      await _lockEdited(albumId: albumId, editedId: editedId, uid: uid);
-    }
+    // 동시 편집 허용: 자동 락 사용 안 함
 
     await _fs.collection('albums').doc(albumId).update({
       'updatedAt': FieldValue.serverTimestamp(),
@@ -336,6 +333,7 @@ class SharedAlbumService {
         .doc(uid);
     await ref.delete();
 
+    // 동시 편집 허용이므로 락 해제는 선택적
     if (editedId != null) {
       try {
         await _unlockEdited(albumId: albumId, editedId: editedId);
@@ -343,12 +341,27 @@ class SharedAlbumService {
     }
   }
 
-  // [변경] 대상(editedId 또는 originalPhotoId 또는 photoId)으로 "모든 편집 세션" 정리
+  // [추가] 특정 이미지 URL로 editing/* 정리 (정밀 타깃팅)
+  Future<void> clearEditingByUrl({
+    required String albumId,
+    required String photoUrl,
+  }) async {
+    final col = _fs.collection('albums').doc(albumId).collection('editing');
+    final qs = await col.where('photoUrl', isEqualTo: photoUrl).get();
+    for (final d in qs.docs) {
+      try {
+        await d.reference.delete();
+      } catch (_) {}
+    }
+  }
+
+  // 대상(editedId 또는 originalPhotoId 또는 photoId)으로 "모든 편집 세션" 정리
+  // 저장 시 모든 멤버 화면을 동기화하려면 이 API를 사용
   Future<void> clearEditingForTarget({
     required String albumId,
     String? editedId,        // 재편집(편집본) 저장일 때
     String? originalPhotoId, // 원본에서 시작한 저장일 때
-    String? photoId,         // [변경] 추가: photoId 기준 정리
+    String? photoId,         // photoId 기준 정리
   }) async {
     final col = _fs.collection('albums').doc(albumId).collection('editing');
 
@@ -360,7 +373,7 @@ class SharedAlbumService {
           await d.reference.delete();
         } catch (_) {}
       }
-      // 편집본 락도 해제
+      // 편집본 락도 해제(선택)
       try {
         await _unlockEdited(albumId: albumId, editedId: editedId);
       } catch (_) {}
@@ -376,7 +389,7 @@ class SharedAlbumService {
       }
     }
 
-    // ✅ [변경] photoId 기준 정리 (정밀 타깃팅)
+    // photoId 기준 정리
     if (photoId != null && photoId.isNotEmpty) {
       final qs = await col.where('photoId', isEqualTo: photoId).get();
       for (final d in qs.docs) {
@@ -409,13 +422,14 @@ class SharedAlbumService {
         .collection('editing')
         .orderBy('updatedAt', descending: true);
     return q.snapshots().map(
-      (qs) => qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data())).toList(),
+      (qs) =>
+          qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data())).toList(),
     );
   }
 
   // ===== 편집본 저장 (edited/*) =====
 
-  /// [변경] 버전 경로 생성 유틸(공개): albums/{albumId}/edited/{photoId}/{millis}.{ext}
+  /// 버전 경로 생성 유틸(공개): albums/{albumId}/edited/{photoId}/{millis}.{ext}
   String generateEditedStoragePath({
     required String albumId,
     required String photoId,
@@ -431,14 +445,14 @@ class SharedAlbumService {
     required String editorUid,
     required String originalPhotoId,
     required String editedUrl,
-    String? storagePath, // [변경] 추가: 업로드 경로 기록(권장)
+    String? storagePath,
   }) async {
     final editedRef =
         _fs.collection('albums').doc(albumId).collection('edited').doc();
 
     await editedRef.set({
       'url': editedUrl,
-      'storagePath': storagePath,                // [변경]
+      'storagePath': storagePath,
       'originalPhotoId': originalPhotoId,
       'editorUid': editorUid,
       'createdAt': FieldValue.serverTimestamp(),
@@ -448,11 +462,11 @@ class SharedAlbumService {
       'editingStartedAt': null,
     });
 
-    // [변경] 대상(originalPhotoId)으로 모든 편집 세션 정리
+    // [변경] 저장 시 "해당 사진"을 편집 중이던 모든 세션 일괄 제거 (전원 화면 동기화)
     await clearEditingForTarget(
       albumId: albumId,
       originalPhotoId: originalPhotoId,
-      photoId: originalPhotoId, // [변경] photoId에도 동일 키로 정리(있을 때)
+      photoId: originalPhotoId,
     );
   }
 
@@ -462,13 +476,13 @@ class SharedAlbumService {
     required String url,
     required String editorUid,
     String? originalPhotoId,
-    String? storagePath, // [변경]
+    String? storagePath,
   }) async {
     final ref =
         _fs.collection('albums').doc(albumId).collection('edited').doc();
     await ref.set({
       'url': url,
-      'storagePath': storagePath,                // [변경]
+      'storagePath': storagePath,
       if (originalPhotoId != null) 'originalPhotoId': originalPhotoId,
       'editorUid': editorUid,
       'createdAt': FieldValue.serverTimestamp(),
@@ -481,33 +495,35 @@ class SharedAlbumService {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // [변경] originalPhotoId가 있으면 대상 기반 정리, 없으면 내 세션만 정리
+    // [변경] 원본 id가 있으면 해당 타깃의 모든 세션 제거,
+    //        없으면 URL 기준으로라도 정리하여 전원 화면 동기화
     if (originalPhotoId != null && originalPhotoId.isNotEmpty) {
       await clearEditingForTarget(
         albumId: albumId,
         originalPhotoId: originalPhotoId,
-        photoId: originalPhotoId, // [변경] photoId에도 동일 키로 정리(있을 때)
+        photoId: originalPhotoId,
       );
     } else {
+      // [추가] 원본 추적이 없을 때는 photoUrl로 세션 정리
       try {
-        await clearEditing(uid: editorUid, albumId: albumId);
+        await clearEditingByUrl(albumId: albumId, photoUrl: url);
       } catch (_) {}
     }
   }
 
-  /// [변경] 편집본 덮어쓰기: "새 파일"로 업로드한 URL/경로로 문서 교체 + (선택) 이전 파일 삭제
+  /// 편집본 덮어쓰기: "새 파일"로 업로드한 URL/경로로 문서 교체 + (선택) 이전 파일 삭제
   Future<void> saveEditedPhotoOverwrite({
     required String albumId,
     required String editedId,
     required String newUrl,
     required String editorUid,
-    String? newStoragePath,                   // [변경]
-    bool deleteOld = true,                    // [변경]
+    String? newStoragePath,
+    bool deleteOld = true,
   }) async {
     final ref =
         _fs.collection('albums').doc(albumId).collection('edited').doc(editedId);
 
-    // [변경] 이전 storagePath 읽기
+    // 이전 storagePath 읽기
     String? oldStoragePath;
     try {
       final snap = await ref.get();
@@ -517,7 +533,7 @@ class SharedAlbumService {
 
     await ref.update({
       'url': newUrl,
-      if (newStoragePath != null) 'storagePath': newStoragePath, // [변경]
+      if (newStoragePath != null) 'storagePath': newStoragePath,
       'editorUid': editorUid,
       'isEditing': false,
       'editingUid': null,
@@ -529,7 +545,7 @@ class SharedAlbumService {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // [변경] 이전 파일 정리(선택)
+    // 이전 파일 정리(선택)
     if (deleteOld &&
         oldStoragePath != null &&
         oldStoragePath.isNotEmpty &&
@@ -539,17 +555,20 @@ class SharedAlbumService {
       } catch (_) {}
     }
 
-    // [변경] 대상(editedId)으로 모든 편집 세션 정리
-    await clearEditingForTarget(albumId: albumId, editedId: editedId);
+    // [변경] 덮어쓰기 저장 시, 이 편집본을 편집 중이던 모든 세션 제거 (전원 동기화)
+    await clearEditingForTarget(
+      albumId: albumId,
+      editedId: editedId,
+    );
   }
 
   Stream<List<EditedPhoto>> watchEditedPhotos(String albumId) {
-    // 편집 중(isEditing==true)은 숨김
+    // 정책에 따라 isEditing 필터는 유지/제거 선택 가능
     final q = _fs
         .collection('albums')
         .doc(albumId)
         .collection('edited')
-        .where('isEditing', isEqualTo: false)
+        // .where('isEditing', isEqualTo: false) // 필요 시 활성화
         .orderBy('createdAt', descending: true);
 
     return q.snapshots().map(
@@ -563,7 +582,7 @@ class SharedAlbumService {
   }) async {
     if (albumId == null) throw ArgumentError('albumId is null');
 
-    // [변경] 삭제 전 문서의 storagePath 읽어서 파일 삭제
+    // 삭제 전 문서의 storagePath 읽어서 파일 삭제
     final ref =
         _fs.collection('albums').doc(albumId).collection('edited').doc(editedId);
     String? storagePath;
