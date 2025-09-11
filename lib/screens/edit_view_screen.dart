@@ -12,6 +12,8 @@ import '../services/shared_album_service.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter/services.dart' show rootBundle, NetworkAssetBundle;
 import 'face_landmarker.dart';
+import '../beauty/beauty_panel.dart';
+import 'package:sharedalbumapp/beauty/beauty_controller.dart';
 
 class EditViewScreen extends StatefulWidget {
   // albumId(파베) 또는 imagePath(로컬/URL) 중 하나만 있으면 동작
@@ -80,6 +82,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // state 필드들 아래
   bool _showLm = false; // 선택 얼굴에만 점 표시 토글
   bool _dimOthers = true; // 선택 외 영역 암처리
+
+  Uint8List? _editedBytes; // 보정/저장용 결과
 
   // 저장 핵심 로직
 
@@ -448,9 +452,19 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   // 단일 이미지 프리뷰
+  // 단일 이미지 프리뷰 (보정본이 있으면 최우선으로 사용)
+  // 단일 이미지 프리뷰
   Widget _buildSinglePreview(String path) {
-    final isUrl = path.startsWith('http');
+    if (_editedBytes != null) {
+      return Image.memory(
+        _editedBytes!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    }
 
+    final isUrl = path.startsWith('http');
     if (isUrl) {
       return Image.network(
         path,
@@ -472,7 +486,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
         },
         errorBuilder: (_, __, ___) {
           if (mounted && _isImageReady) {
-            setState(() => _isImageReady = false); // 에러 시 저장 비활성
+            setState(() => _isImageReady = false);
           }
           return const Center(
             child: Text(
@@ -483,7 +497,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
         },
       );
     } else {
-      // 로컬/Asset은 즉시 사용 가능
       if (!_isImageReady) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && !_isImageReady) {
@@ -609,7 +622,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
         ),
 
         // (자리만 잡아둠) 실제 보정 패널 오픈
-        _faceTool(icon: Icons.brush, onTap: _openBeautyPanelStub),
+        _faceTool(icon: Icons.brush, onTap: _openBeautyPanel),
       ],
     );
   }
@@ -626,23 +639,36 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   // 추후 슬라이더(피부/눈/코/입술) 넣을 자리
-  void _openBeautyPanelStub() {
-    showModalBottomSheet(
+  Future<void> _openBeautyPanel() async {
+    if (_selectedFace == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('얼굴을 먼저 선택하세요.')));
+      return;
+    }
+
+    // 현재 스테이지를 PNG로 캡처해서 패널로 전달
+    final png = await _exportEditedImageBytes();
+
+    final Size stageSize = _captureKey.currentContext!.size!;
+    final out = await showModalBottomSheet<Uint8List>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => SizedBox(
-        height: 220,
-        child: Center(
-          child: Text(
-            '여기에 피부/눈/코/입술 슬라이더 넣을 예정',
-            style: TextStyle(color: Colors.black54),
-          ),
-        ),
+      builder: (_) => BeautyPanel(
+        srcPng: png,
+        faces468: _faces468,
+        selectedFace: _selectedFace!,
+        imageSize: stageSize,
       ),
     );
+
+    if (out != null && mounted) {
+      setState(() => _editedBytes = out); // 결과 반영 → 프리뷰가 자동으로 보정본을 그림
+    }
   }
 
   Future<void> _loadOriginalBytes() async {
