@@ -8,6 +8,10 @@ import 'package:firebase_storage/firebase_storage.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import '../services/shared_album_service.dart';
+// 파일 최상단 import들에 추가
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show rootBundle, NetworkAssetBundle;
+import 'face_landmarker.dart';
 
 class EditViewScreen extends StatefulWidget {
   // albumId(파베) 또는 imagePath(로컬/URL) 중 하나만 있으면 동작
@@ -62,6 +66,20 @@ class _EditViewScreenState extends State<EditViewScreen> {
   bool _isSaving = false; // 저장 연타 방지
   bool _isImageReady = false; // 이미지 로딩 완료 여부
   bool _isFaceEditMode = false; // 얼굴보정 모드 여부
+
+  // ⬇️ 여기 한 줄 추가
+  bool _taskLoadedOk = false;
+
+  Uint8List? _originalBytes; // 이미지 원본 바이트
+  bool _modelLoaded = false; // 모델 로드 여부
+  List<List<Offset>> _faces468 = []; // 결과 포인트(정규화)
+
+  int? _selectedFace; // 선택된 얼굴 인덱스
+  List<Rect> _faceRects = []; // 얼굴별 바운딩 박스(정규화 0~1)
+
+  // state 필드들 아래
+  bool _showLm = false; // 선택 얼굴에만 점 표시 토글
+  bool _dimOthers = true; // 선택 외 영역 암처리
 
   // 저장 핵심 로직
 
@@ -376,14 +394,57 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   // 편집 스테이지: 현재는 이미지만, 추후 텍스트/스티커/도형 위젯을 Stack으로 추가하면 저장에 그대로 반영됨
   Widget _buildEditableStage() {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        if (widget.imagePath != null) _buildSinglePreview(widget.imagePath!),
-        // TODO: _selectedTool에 따라 텍스트/스티커/도형 등을 이 위에 올리면,
-        //       저장 시 RepaintBoundary 캡처에 자동으로 합성됩니다.
-      ],
+    return LayoutBuilder(
+      builder: (_, c) {
+        final paintSize = Size(c.maxWidth, c.maxHeight);
+
+        return GestureDetector(
+          onTapDown: (details) {
+            final local = details.localPosition;
+            final idx = _hitTestFace(local, paintSize);
+            setState(() => _selectedFace = idx);
+          },
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (widget.imagePath != null)
+                _buildSinglePreview(widget.imagePath!),
+
+              if (_isFaceEditMode && _faces468.isNotEmpty)
+                IgnorePointer(
+                  ignoring: true,
+                  // _buildEditableStage() 안의 CustomPaint 부분만 교체
+                  child: CustomPaint(
+                    painter: _LmOverlayPainter(
+                      faces: _faces468,
+                      faceRects: _faceRects,
+                      selectedFace: _selectedFace,
+                      paintSize: paintSize,
+                      showLm: _showLm,
+                      dimOthers: _dimOthers,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
+  }
+
+  // 터치 위치가 어떤 얼굴 박스에 들어가는지 검사
+  int? _hitTestFace(Offset pos, Size size) {
+    for (int i = 0; i < _faceRects.length; i++) {
+      final r = _faceRects[i];
+      final rectPx = Rect.fromLTRB(
+        r.left * size.width,
+        r.top * size.height,
+        r.right * size.width,
+        r.bottom * size.height,
+      ).inflate(12); // 약간 여유
+      if (rectPx.contains(pos)) return i;
+    }
+    return null;
   }
 
   // 단일 이미지 프리뷰
@@ -439,6 +500,28 @@ class _EditViewScreenState extends State<EditViewScreen> {
     }
   }
 
+  Future<void> _smokeTestLoadTask() async {
+    try {
+      final data = await rootBundle.load(
+        'assets/mediapipe/face_landmarker.task',
+      );
+      debugPrint('✅ face_landmarker.task loaded: ${data.lengthInBytes} bytes');
+      if (mounted) {
+        setState(() => _taskLoadedOk = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('모델 로드 OK (${data.lengthInBytes} bytes)')),
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ face_landmarker.task load failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('모델 로드 실패: $e')));
+      }
+    }
+  }
+
   // 기본(메인) 툴바
   Widget _buildMainToolbar() {
     return Row(
@@ -450,6 +533,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
             // 얼굴보정 아이콘(예: index == 2)을 누르면 모드 전환
             if (index == 2) {
               setState(() => _isFaceEditMode = true);
+              // 이미 결과 있으면 재인식 생략
+              if (_faces468.isEmpty) {
+                _smokeTestLoadTask();
+                _runFaceDetect();
+              }
             } else {
               setState(() => _selectedTool = index);
             }
@@ -472,33 +560,241 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   // 얼굴보정 전용 툴바 (아이콘들은 임시 플레이스홀더)
+  // 교체: _buildFaceEditToolbar()
   Widget _buildFaceEditToolbar() {
-    final faceTools = <IconData>[
-      Icons.refresh, // 얼굴형
-      Icons.crop_square, // 얼굴 작게/크게
-      Icons.blur_on, // 피부 보정
-      Icons.remove_red_eye, // 눈 보정
-      Icons.brush, // 입술/메이크업
-    ];
-
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        // 왼쪽 X 버튼: 기본 툴바로 복귀
-        GestureDetector(
-          onTap: () => setState(() => _isFaceEditMode = false),
-          child: const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 6.0),
-            child: Icon(Icons.close, color: Colors.redAccent, size: 22),
-          ),
+        _faceTool(
+          icon: Icons.close,
+          onTap: () {
+            setState(() {
+              _isFaceEditMode = false;
+              _faces468.clear();
+              _faceRects.clear();
+              _selectedFace = null;
+            });
+          },
         ),
-        ...faceTools.map(
-          (icon) => Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6.0),
-            child: Icon(icon, color: Colors.black87, size: 22),
-          ),
+
+        // 가장 큰 얼굴 자동 선택(편의)
+        _faceTool(
+          icon: Icons.center_focus_strong,
+          onTap: () {
+            if (_faceRects.isEmpty) return;
+            int largest = 0;
+            double best = -1;
+            for (int i = 0; i < _faceRects.length; i++) {
+              final r = _faceRects[i];
+              final area = (r.width * r.height);
+              if (area > best) {
+                best = area;
+                largest = i;
+              }
+            }
+            setState(() => _selectedFace = largest);
+          },
         ),
+
+        // 랜드마크 점 보이기/숨기기
+        _faceTool(
+          icon: _showLm ? Icons.visibility : Icons.visibility_off,
+          onTap: () => setState(() => _showLm = !_showLm),
+        ),
+
+        // 선택된 얼굴 외 암처리 On/Off
+        _faceTool(
+          icon: _dimOthers ? Icons.brightness_5 : Icons.brightness_5_outlined,
+          onTap: () => setState(() => _dimOthers = !_dimOthers),
+        ),
+
+        // (자리만 잡아둠) 실제 보정 패널 오픈
+        _faceTool(icon: Icons.brush, onTap: _openBeautyPanelStub),
       ],
     );
   }
+
+  // 작은 공통 위젯
+  Widget _faceTool({required IconData icon, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4),
+        child: Icon(icon, size: 22, color: Colors.black87),
+      ),
+    );
+  }
+
+  // 추후 슬라이더(피부/눈/코/입술) 넣을 자리
+  void _openBeautyPanelStub() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => SizedBox(
+        height: 220,
+        child: Center(
+          child: Text(
+            '여기에 피부/눈/코/입술 슬라이더 넣을 예정',
+            style: TextStyle(color: Colors.black54),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _loadOriginalBytes() async {
+    if (widget.imagePath == null) return;
+    final path = widget.imagePath!;
+    if (path.startsWith('http')) {
+      final bundle = NetworkAssetBundle(Uri.parse(path));
+      final data = await bundle.load(path);
+      _originalBytes = data.buffer.asUint8List();
+    } else {
+      final data = await rootBundle.load(path);
+      _originalBytes = data.buffer.asUint8List();
+    }
+  }
+
+  Future<void> _runFaceDetect() async {
+    // 1) 모델 로드(1회)
+    if (!_modelLoaded) {
+      final task = await rootBundle.load(
+        'assets/mediapipe/face_landmarker.task',
+      );
+      await FaceLandmarker.loadModel(task.buffer.asUint8List(), maxFaces: 5);
+      _modelLoaded = true;
+    }
+    // 2) 이미지 바이트 준비
+    if (_originalBytes == null) {
+      await _loadOriginalBytes();
+    }
+    if (_originalBytes == null) return;
+
+    final faces = await FaceLandmarker.detect(_originalBytes!);
+
+    setState(() {
+      _faces468 = faces;
+
+      // 각 얼굴의 정규화 바운딩 박스 계산
+      _faceRects = faces.map((pts) {
+        double minX = 1, minY = 1, maxX = 0, maxY = 0;
+        for (final p in pts) {
+          if (p.dx < minX) minX = p.dx;
+          if (p.dy < minY) minY = p.dy;
+          if (p.dx > maxX) maxX = p.dx;
+          if (p.dy > maxY) maxY = p.dy;
+        }
+        return Rect.fromLTRB(minX, minY, maxX, maxY); // 0~1
+      }).toList();
+    });
+  }
+}
+
+class _LmOverlayPainter extends CustomPainter {
+  final List<List<Offset>> faces; // 0~1
+  final List<Rect> faceRects; // 0~1
+  final int? selectedFace;
+  final Size paintSize;
+  final bool showLm;
+  final bool dimOthers;
+
+  _LmOverlayPainter({
+    required this.faces,
+    required this.faceRects,
+    required this.selectedFace,
+    required this.paintSize,
+    required this.showLm,
+    required this.dimOthers,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 선택된 얼굴 외 영역 암처리
+    if (dimOthers && selectedFace != null && selectedFace! < faceRects.length) {
+      final sel = _toPx(faceRects[selectedFace!], paintSize);
+      final full = Path()..addRect(Offset.zero & paintSize);
+      final hole = Path()
+        ..addRRect(
+          RRect.fromRectAndRadius(sel.inflate(8), const Radius.circular(12)),
+        );
+      final diff = Path.combine(PathOperation.difference, full, hole);
+      canvas.drawPath(diff, Paint()..color = const Color(0x88000000));
+    }
+
+    // 랜드마크 점 (옵션)
+    if (showLm) {
+      final dot = Paint()
+        ..color = const Color(0xFF00D1FF)
+        ..style = PaintingStyle.fill;
+      final selDot = Paint()
+        ..color = const Color(0xFF00B3CC)
+        ..style = PaintingStyle.fill;
+      for (int i = 0; i < faces.length; i++) {
+        final pts = faces[i];
+        final isSel = (i == selectedFace);
+        for (final p in pts) {
+          final dx = p.dx * paintSize.width;
+          final dy = p.dy * paintSize.height;
+          canvas.drawCircle(
+            Offset(dx, dy),
+            isSel ? 2.2 : 1.4,
+            isSel ? selDot : dot,
+          );
+        }
+      }
+    }
+
+    // 볼 라인(자연스러운 곡선)
+    for (int i = 0; i < faceRects.length; i++) {
+      final rectPx = _toPx(faceRects[i], paintSize);
+      final isSel = (i == selectedFace);
+
+      final stroke = Paint()
+        ..color = isSel ? const Color(0xFF00CFEA) : Colors.white70
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = isSel ? 4.0 : 2.5
+        ..strokeCap = StrokeCap.round;
+
+      // 좌/우 볼 라인용 곡선 (bbox를 이용해 부드러운 S-curve 느낌)
+      final w = rectPx.width;
+      final h = rectPx.height;
+
+      // Left cheek
+      final lStart = Offset(rectPx.left + w * 0.12, rectPx.top + h * 0.22);
+      final lCtrl = Offset(rectPx.left - w * 0.05, rectPx.top + h * 0.62);
+      final lEnd = Offset(rectPx.left + w * 0.18, rectPx.bottom - h * 0.10);
+      final pathL = Path()
+        ..moveTo(lStart.dx, lStart.dy)
+        ..quadraticBezierTo(lCtrl.dx, lCtrl.dy, lEnd.dx, lEnd.dy);
+      canvas.drawPath(pathL, stroke);
+
+      // Right cheek
+      final rStart = Offset(rectPx.right - w * 0.12, rectPx.top + h * 0.22);
+      final rCtrl = Offset(rectPx.right + w * 0.05, rectPx.top + h * 0.62);
+      final rEnd = Offset(rectPx.right - w * 0.18, rectPx.bottom - h * 0.10);
+      final pathR = Path()
+        ..moveTo(rStart.dx, rStart.dy)
+        ..quadraticBezierTo(rCtrl.dx, rCtrl.dy, rEnd.dx, rEnd.dy);
+      canvas.drawPath(pathR, stroke);
+    }
+  }
+
+  Rect _toPx(Rect r, Size s) => Rect.fromLTRB(
+    r.left * s.width,
+    r.top * s.height,
+    r.right * s.width,
+    r.bottom * s.height,
+  );
+
+  @override
+  bool shouldRepaint(covariant _LmOverlayPainter old) =>
+      old.faces != faces ||
+      old.faceRects != faceRects ||
+      old.selectedFace != selectedFace ||
+      old.paintSize != paintSize ||
+      old.showLm != showLm ||
+      old.dimOthers != dimOthers;
 }

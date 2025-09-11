@@ -19,7 +19,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.sharedalbumapp"
-        minSdk = 23
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -54,8 +54,14 @@ android {
     }
 
     packaging {
-        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}"
+                    pickFirsts += setOf("**/libc++_shared.so")
+         }
     }
 }
 
 flutter { source = "../.." }
+
+dependencies {
+    implementation("com.google.mediapipe:tasks-vision:0.10.+")
+}

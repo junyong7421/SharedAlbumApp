@@ -37,3 +37,4 @@ flutter:
     - assets/images/
     - assets/images/google_logo.png
     - assets/icons/shared_album_list.png
+    - assets/mediapipe/face_landmarker.task
