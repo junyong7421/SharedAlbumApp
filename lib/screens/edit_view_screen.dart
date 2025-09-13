@@ -1,26 +1,23 @@
 // lib/screens/edit_view_screen.dart
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import '../services/shared_album_service.dart';
 
 class EditViewScreen extends StatefulWidget {
-  // albumId(파베) 또는 imagePath(로컬/URL) 중 하나만 있으면 동작
   final String albumName;
-  final String? albumId; // 저장/편집상태 해제에 사용
-  final String? imagePath; // 단일 이미지 표시
-
-  // 덮어쓰기/출처 추적 (옵션)
-  final String? editedId; // 편집본 재편집 → 덮어쓰기 대상
-  final String? originalPhotoId; // 원본에서 편집 시작 → 원본 추적용
-
-  // 저장 경로 안정화를 위한 photoId (있으면 버전 경로 키로 사용)
-  final String? photoId; // 예: 원본 photoId
+  final String? albumId;
+  final String? imagePath;
+  final String? editedId;
+  final String? originalPhotoId;
+  final String? photoId;
 
   const EditViewScreen({
     super.key,
@@ -31,9 +28,9 @@ class EditViewScreen extends StatefulWidget {
     this.originalPhotoId,
     this.photoId,
   }) : assert(
-         albumId != null || imagePath != null,
-         'albumId 또는 imagePath 중 하나는 반드시 필요합니다.',
-       );
+          albumId != null || imagePath != null,
+          'albumId 또는 imagePath 중 하나는 반드시 필요합니다.',
+        );
 
   @override
   State<EditViewScreen> createState() => _EditViewScreenState();
@@ -45,35 +42,36 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   final _svc = SharedAlbumService.instance;
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
+  String get _name => FirebaseAuth.instance.currentUser?.displayName ?? '사용자';
 
   final GlobalKey _captureKey = GlobalKey();
 
   final List<IconData> _toolbarIcons = const [
     Icons.mouse,
     Icons.grid_on,
-    Icons.face_retouching_natural, // 👈 새 아이콘 (Material Icons 제공)
+    Icons.face_retouching_natural,
     Icons.visibility,
     Icons.text_fields,
     Icons.architecture,
     Icons.widgets,
   ];
 
-  // 상태/가드
-  bool _isSaving = false; // 저장 연타 방지
-  bool _isImageReady = false; // 이미지 로딩 완료 여부
-  bool _isFaceEditMode = false; // 얼굴보정 모드 여부
+  bool _isSaving = false;
+  bool _isImageReady = false;
+  bool _isFaceEditMode = false;
 
-  // 저장 핵심 로직
+  Timer? _presenceHbTimer;   // presence heartbeat
+  Timer? _editHbTimer;       // editing_by_user heartbeat
+  Timer? _previewDebounce;
+  String? _presenceKey;
 
-  // RepaintBoundary → PNG 바이트 추출
-  Future<Uint8List> _exportEditedImageBytes() async {
+  Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
     final boundary =
-        _captureKey.currentContext?.findRenderObject()
-            as RenderRepaintBoundary?;
+        _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
     if (boundary == null) {
       throw StateError('캡처 대상을 찾지 못했습니다.');
     }
-    final ui.Image image = await boundary.toImage(pixelRatio: 2.5);
+    final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     if (byteData == null) {
       throw StateError('PNG 인코딩에 실패했습니다.');
@@ -81,14 +79,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return byteData.buffer.asUint8List();
   }
 
-  // PNG 바이트를 Storage edited/* 경로에 업로드
   Future<({String url, String storagePath})> _uploadEditedPngBytes(
-    Uint8List png,
-  ) async {
+      Uint8List png) async {
     if (widget.albumId == null) {
       throw StateError('albumId가 없습니다.');
     }
-    // 경로 키: photoId > originalPhotoId > editedId > 내 uid
     final photoKey =
         widget.photoId ?? widget.originalPhotoId ?? widget.editedId ?? _uid;
     final storagePath = _svc.generateEditedStoragePath(
@@ -102,7 +97,20 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return (url: url, storagePath: storagePath);
   }
 
-  // 저장 처리: 항상 캡처→업로드→문서 갱신
+  Future<String> _uploadPreviewPng(Uint8List png) async {
+    if (widget.albumId == null || _presenceKey == null) {
+      throw StateError('프리뷰 업로드에 필요한 정보가 없습니다.');
+    }
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final path = 'albums/${widget.albumId}/previews/${_presenceKey}/$ts.png';
+    final ref = FirebaseStorage.instance.ref(path);
+    await ref.putData(
+      png,
+      SettableMetadata(contentType: 'image/png', cacheControl: 'public,max-age=60'),
+    );
+    return await ref.getDownloadURL();
+  }
+
   Future<void> _onSave() async {
     if (widget.albumId == null) {
       if (mounted) {
@@ -113,7 +121,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return;
     }
 
-    // 이미지 준비 전/중복 저장 가드
     if (_isSaving) return;
     if (!_isImageReady) {
       if (mounted) {
@@ -126,15 +133,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _isSaving = true;
 
     try {
-      // 1) 현재 편집 화면 캡처
-      final png = await _exportEditedImageBytes();
-
-      // 2) edited/* 경로로 업로드
+      final png = await _exportEditedImageBytes(pixelRatio: 2.5);
       final uploaded = await _uploadEditedPngBytes(png);
 
-      // 3) 저장 분기
       if ((widget.editedId ?? '').isNotEmpty) {
-        // 편집본 재편집 → 덮어쓰기 + 이전 파일 정리
         await _svc.saveEditedPhotoOverwrite(
           albumId: widget.albumId!,
           editedId: widget.editedId!,
@@ -144,7 +146,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
           deleteOld: true,
         );
       } else if ((widget.originalPhotoId ?? '').isNotEmpty) {
-        // 원본에서 신규 편집본 생성(원본 추적)
         await _svc.saveEditedPhotoFromUrl(
           albumId: widget.albumId!,
           editorUid: _uid,
@@ -153,7 +154,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
           storagePath: uploaded.storagePath,
         );
       } else {
-        // 예외/호환: 원본 id 없으면 최소 저장
         await _svc.saveEditedPhoto(
           albumId: widget.albumId!,
           url: uploaded.url,
@@ -162,33 +162,108 @@ class _EditViewScreenState extends State<EditViewScreen> {
         );
       }
 
-      // 4) 저장 성공 시에만 내 세션 정리
+      // 저장 시에만 세션 종료
       try {
-        await _svc.clearEditing(
-          uid: _uid,
-          albumId: widget.albumId!,
-          editedId: widget.editedId, // 재편집이면 락 해제 포함
-        );
+        await _svc.endEditing(uid: _uid, albumId: widget.albumId!);
       } catch (_) {}
 
+      await _leavePresenceIfPossible();
+
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('편집이 저장되었습니다.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('편집이 저장되었습니다.')));
       Navigator.pop(context, 'saved');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('저장 실패: $e')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('저장 실패: $e')));
     } finally {
       _isSaving = false;
     }
   }
 
-  // UI
+  @override
+  void initState() {
+    super.initState();
+    _presenceKey = widget.photoId ?? widget.editedId ?? widget.originalPhotoId;
 
-  // 그라데이션 필 버튼
+    // presence 진입 + 하트비트 시작
+    _enterPresenceIfPossible();
+
+    // editing_by_user 하트비트 시작 (active 유지)
+    if (widget.albumId != null) {
+      _editHbTimer?.cancel();
+      _editHbTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+        _svc.touchEditing(uid: _uid, albumId: widget.albumId!);
+      });
+      // 즉시 한 번 갱신
+      _svc.touchEditing(uid: _uid, albumId: widget.albumId!);
+    }
+  }
+
+  @override
+  void dispose() {
+    _presenceHbTimer?.cancel();
+    _editHbTimer?.cancel();
+    _previewDebounce?.cancel();
+    _leavePresenceIfPossible();
+    super.dispose();
+  }
+
+  Future<void> _enterPresenceIfPossible() async {
+    if (widget.albumId == null || _presenceKey == null) return;
+    try {
+      await _svc.enterEditingPresence(
+        albumId: widget.albumId!,
+        photoId: _presenceKey!,
+        uid: _uid,
+        name: _name,
+      );
+      _presenceHbTimer?.cancel();
+      _presenceHbTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+        _svc.heartbeatEditingPresence(
+          albumId: widget.albumId!,
+          photoId: _presenceKey!,
+          uid: _uid,
+        );
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _leavePresenceIfPossible() async {
+    if (widget.albumId == null || _presenceKey == null) return;
+    try {
+      await _svc.leaveEditingPresence(
+        albumId: widget.albumId!,
+        photoId: _presenceKey!,
+        uid: _uid,
+      );
+    } catch (_) {}
+  }
+
+  void _schedulePreviewUpdate() {
+    if (widget.albumId == null || _presenceKey == null) return;
+    if (!_isImageReady) return;
+    _previewDebounce?.cancel();
+    _previewDebounce = Timer(const Duration(milliseconds: 700), () async {
+      try {
+        final bytes = await _exportEditedImageBytes(pixelRatio: 0.7);
+        final url = await _uploadPreviewPng(bytes);
+        await _svc.updateEditingPreviewPresence(
+          albumId: widget.albumId!,
+          photoId: _presenceKey!,
+          uid: _uid,
+          previewUrl: url,
+        );
+      } catch (_) {}
+    });
+  }
+
+  Future<void> _handleBack() async {
+    await _leavePresenceIfPossible(); // presence만 정리
+    if (mounted) Navigator.pop(context);
+  }
+
   Widget _gradientPillButton({
     required String label,
     required VoidCallback onTap,
@@ -235,161 +310,180 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      // WillPopScope 없이 단순 뒤로가기 → 세션 유지
-      backgroundColor: const Color(0xFFE6EBFE),
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Column(
-              children: [
-                // 상단 바
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      GestureDetector(
-                        onTap: () => Navigator.pop(context),
-                        child: const Icon(
-                          Icons.arrow_back_ios,
-                          color: Color(0xFF625F8C),
-                          size: 24,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const UserIconButton(),
-                      const SizedBox(width: 10),
-                      const Text(
-                        '편집',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF625F8C),
-                        ),
-                      ),
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFFC6DCFF),
-                              Color(0xFFD2D1FF),
-                              Color(0xFFF5CFFF),
-                            ],
+    return WillPopScope(
+      onWillPop: () async {
+        await _handleBack();
+        return false;
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFE6EBFE),
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        GestureDetector(
+                          onTap: _handleBack,
+                          child: const Icon(
+                            Icons.arrow_back_ios,
+                            color: Color(0xFF625F8C),
+                            size: 24,
                           ),
                         ),
-                        child: Text(
-                          widget.albumName,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
+                        const SizedBox(width: 8),
+                        const UserIconButton(),
+                        const SizedBox(width: 10),
+                        const Text(
+                          '편집',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF625F8C),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // 저장 버튼: 상단 바 아래, 오른쪽 정렬
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: Row(
-                    children: [
-                      const Spacer(),
-                      _gradientPillButton(label: '저장', onTap: _onSave),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-
-                // 캡처 대상: 편집 스테이지 전체
-                Container(
-                  height: MediaQuery.of(context).size.height * 0.55,
-                  margin: const EdgeInsets.symmetric(horizontal: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 6,
-                        offset: Offset(2, 2),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(20),
-                    child: RepaintBoundary(
-                      key: _captureKey,
-                      child: _buildEditableStage(),
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            gradient: const LinearGradient(
+                              colors: [
+                                Color(0xFFC6DCFF),
+                                Color(0xFFD2D1FF),
+                                Color(0xFFF5CFFF),
+                              ],
+                            ),
+                          ),
+                          child: Text(
+                            widget.albumName,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-
-                const SizedBox(height: 20),
-
-                // 툴바 (디자인 유지)
-                // ↓ 기존 툴바 Container 전체를 이걸로 교체
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 8,
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Row(
+                      children: [
+                        const Spacer(),
+                        _gradientPillButton(label: '저장', onTap: _onSave),
+                      ],
+                    ),
                   ),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(18),
-                    boxShadow: const [
-                      BoxShadow(color: Colors.black12, blurRadius: 4),
-                    ],
+                  const SizedBox(height: 12),
+                  Container(
+                    height: MediaQuery.of(context).size.height * 0.55,
+                    margin: const EdgeInsets.symmetric(horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.transparent,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black12,
+                          blurRadius: 6,
+                          offset: Offset(2, 2),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: RepaintBoundary(
+                        key: _captureKey,
+                        child: _buildEditableStage(),
+                      ),
+                    ),
                   ),
-                  child: _isFaceEditMode
-                      ? _buildFaceEditToolbar() // 얼굴보정 전용 툴바
-                      : _buildMainToolbar(), // 기본 툴바
-                ),
-
-                const Spacer(),
-                const SizedBox(height: 20),
-              ],
-            ),
-
-            // 하단 네비게이션 바
-            Positioned(
-              bottom: 20,
-              left: 20,
-              right: 20,
-              child: CustomBottomNavBar(selectedIndex: _selectedIndex),
-            ),
-          ],
+                  const SizedBox(height: 20),
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 20),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black12, blurRadius: 4),
+                      ],
+                    ),
+                    child: _isFaceEditMode
+                        ? _buildFaceEditToolbar()
+                        : _buildMainToolbar(),
+                  ),
+                  const Spacer(),
+                  const SizedBox(height: 20),
+                ],
+              ),
+              Positioned(
+                bottom: 20,
+                left: 20,
+                right: 20,
+                child: CustomBottomNavBar(selectedIndex: _selectedIndex),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  // 편집 스테이지: 현재는 이미지만, 추후 텍스트/스티커/도형 위젯을 Stack으로 추가하면 저장에 그대로 반영됨
   Widget _buildEditableStage() {
     return Stack(
       fit: StackFit.expand,
       children: [
         if (widget.imagePath != null) _buildSinglePreview(widget.imagePath!),
-        // TODO: _selectedTool에 따라 텍스트/스티커/도형 등을 이 위에 올리면,
-        //       저장 시 RepaintBoundary 캡처에 자동으로 합성됩니다.
+        if (widget.albumId != null && _presenceKey != null)
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _svc.editingMembersStream(
+              albumId: widget.albumId!,
+              photoId: _presenceKey!,
+            ),
+            builder: (context, snap) {
+              if (!snap.hasData) return const SizedBox.shrink();
+              final docs = snap.data!.docs;
+              String? otherPreview;
+              for (final d in docs) {
+                final data = d.data();
+                final uid = (data['uid'] ?? '') as String;
+                final url = data['previewUrl'] as String?;
+                if (uid != _uid && url != null && url.isNotEmpty) {
+                  otherPreview = url;
+                  break;
+                }
+              }
+              if (otherPreview == null) return const SizedBox.shrink();
+              return IgnorePointer(
+                ignoring: true,
+                child: Opacity(
+                  opacity: 0.35,
+                  child: Image.network(
+                    otherPreview,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              );
+            },
+          ),
       ],
     );
   }
 
-  // 단일 이미지 프리뷰
   Widget _buildSinglePreview(String path) {
     final isUrl = path.startsWith('http');
-
     if (isUrl) {
       return Image.network(
         path,
@@ -401,6 +495,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted && !_isImageReady) {
                 setState(() => _isImageReady = true);
+                _schedulePreviewUpdate();
               }
             });
             return child;
@@ -411,7 +506,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
         },
         errorBuilder: (_, __, ___) {
           if (mounted && _isImageReady) {
-            setState(() => _isImageReady = false); // 에러 시 저장 비활성
+            setState(() => _isImageReady = false);
           }
           return const Center(
             child: Text(
@@ -422,11 +517,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
         },
       );
     } else {
-      // 로컬/Asset은 즉시 사용 가능
       if (!_isImageReady) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && !_isImageReady) {
             setState(() => _isImageReady = true);
+            _schedulePreviewUpdate();
           }
         });
       }
@@ -439,7 +534,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
     }
   }
 
-  // 기본(메인) 툴바
   Widget _buildMainToolbar() {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -447,12 +541,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
         final isSelected = _selectedTool == index;
         return GestureDetector(
           onTap: () {
-            // 얼굴보정 아이콘(예: index == 2)을 누르면 모드 전환
             if (index == 2) {
               setState(() => _isFaceEditMode = true);
             } else {
               setState(() => _selectedTool = index);
             }
+            _schedulePreviewUpdate();
           },
           child: Container(
             padding: const EdgeInsets.all(6),
@@ -471,31 +565,34 @@ class _EditViewScreenState extends State<EditViewScreen> {
     );
   }
 
-  // 얼굴보정 전용 툴바 (아이콘들은 임시 플레이스홀더)
   Widget _buildFaceEditToolbar() {
     final faceTools = <IconData>[
-      Icons.refresh, // 얼굴형
-      Icons.crop_square, // 얼굴 작게/크게
-      Icons.blur_on, // 피부 보정
-      Icons.remove_red_eye, // 눈 보정
-      Icons.brush, // 입술/메이크업
+      Icons.refresh,
+      Icons.crop_square,
+      Icons.blur_on,
+      Icons.remove_red_eye,
+      Icons.brush,
     ];
-
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        // 왼쪽 X 버튼: 기본 툴바로 복귀
         GestureDetector(
-          onTap: () => setState(() => _isFaceEditMode = false),
+          onTap: () {
+            setState(() => _isFaceEditMode = false);
+            _schedulePreviewUpdate();
+          },
           child: const Padding(
             padding: EdgeInsets.symmetric(horizontal: 6.0),
             child: Icon(Icons.close, color: Colors.redAccent, size: 22),
           ),
         ),
         ...faceTools.map(
-          (icon) => Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6.0),
-            child: Icon(icon, color: Colors.black87, size: 22),
+          (icon) => GestureDetector(
+            onTap: _schedulePreviewUpdate,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6.0),
+              child: Icon(icon, color: Colors.black87, size: 22),
+            ),
           ),
         ),
       ],
