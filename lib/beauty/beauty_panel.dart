@@ -5,16 +5,21 @@ import 'package:flutter/material.dart';
 import 'beauty_controller.dart';
 
 class BeautyPanel extends StatefulWidget {
-  final Uint8List srcPng; // 현재 캡처/편집 이미지 PNG 바이트
-  final List<List<Offset>> faces468; // 전체 얼굴 랜드마크
-  final int selectedFace; // 어느 얼굴에 적용할지
-  final Size imageSize; // 캔버스 사이즈
+  final Uint8List srcPng;
+  final List<List<Offset>> faces468;
+  final int selectedFace;
+  final Size imageSize;
+
+  // ⬇️ 추가
+  final BeautyParams? initialParams;
+
   const BeautyPanel({
     super.key,
     required this.srcPng,
     required this.faces468,
     required this.selectedFace,
     required this.imageSize,
+    this.initialParams, // ⬅️ optional
   });
 
   @override
@@ -22,8 +27,14 @@ class BeautyPanel extends StatefulWidget {
 }
 
 class _BeautyPanelState extends State<BeautyPanel> {
-  final _params = BeautyParams();
+  late BeautyParams _params;            // ⬅️ late로 변경
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _params = (widget.initialParams ?? BeautyParams()).copyWith(); // ⬅️ 초기값 반영
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -132,7 +143,9 @@ Widget _sliderDeg(String label, double deg, ValueChanged<double> onChangedDeg) {
         imageSize: widget.imageSize,
         params: _params,
       );
-      if (mounted) Navigator.pop(context, out);
+
+      // ⬇️ 결과 이미지 + 최종 파라미터를 함께 반환 (Dart 3 record)
+      if (mounted) Navigator.pop(context, (image: out, params: _params));
     } finally {
       if (mounted) setState(() => _busy = false);
     }

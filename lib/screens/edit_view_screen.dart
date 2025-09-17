@@ -9,7 +9,6 @@ import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import '../services/shared_album_service.dart';
 // 파일 최상단 import들에 추가
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter/services.dart' show rootBundle, NetworkAssetBundle;
 import 'face_landmarker.dart';
 import '../beauty/beauty_panel.dart';
@@ -72,6 +71,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // ⬇️ 여기 한 줄 추가
   bool _taskLoadedOk = false;
 
+  Uint8List? _editedBytes;   // ← 결과 PNG (화면에 보여줄 것)
   Uint8List? _originalBytes; // 이미지 원본 바이트
   bool _modelLoaded = false; // 모델 로드 여부
   List<List<Offset>> _faces468 = []; // 결과 포인트(정규화)
@@ -81,9 +81,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   // state 필드들 아래
   bool _showLm = false; // 선택 얼굴에만 점 표시 토글
-  bool _dimOthers = true; // 선택 외 영역 암처리
+  bool _dimOthers = false; // 선택 외 영역 암처리
 
-  Uint8List? _editedBytes; // 보정/저장용 결과
+  BeautyParams _beautyParams = BeautyParams();
+  Uint8List? _beautyBasePng; // 보정/저장용 결과
 
   // 저장 핵심 로직
 
@@ -597,11 +598,12 @@ Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
           onTap: () => setState(() => _showLm = !_showLm),
         ),
 
-        // 선택된 얼굴 외 암처리 On/Off
+        /*선택된 얼굴 외 암처리 On/Off
         _faceTool(
           icon: _dimOthers ? Icons.brightness_5 : Icons.brightness_5_outlined,
           onTap: () => setState(() => _dimOthers = !_dimOthers),
         ),
+        */
 
         // (자리만 잡아둠) 실제 보정 패널 오픈
         _faceTool(icon: Icons.brush, onTap: _openBeautyPanel),
@@ -629,13 +631,12 @@ Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
     return;
   }
 
-  // 1) 패널용 캡처는 pixelRatio=1.0 (논리 크기와 동일)
-  final png = await _exportEditedImageBytes(pixelRatio: 1.0);
-
-  // 2) 이때 imageSize는 stage의 논리 크기를 그대로 전달 (png와 동일해짐)
+  // 기준 PNG는 한 번만 만들기 (pixelRatio=1.0)
+  _beautyBasePng ??= await _exportEditedImageBytes(pixelRatio: 1.0);
   final Size stageSize = _captureKey.currentContext!.size!;
 
-  final out = await showModalBottomSheet<Uint8List>(
+  // 결과: (image, params) 레코드로 받기
+  final result = await showModalBottomSheet<({Uint8List image, BeautyParams params})>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.white,
@@ -643,17 +644,23 @@ Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
     builder: (_) => BeautyPanel(
-      srcPng: png,
+      srcPng: _beautyBasePng!,     // 항상 기준에서 시작 → 누적 방지
       faces468: _faces468,
       selectedFace: _selectedFace!,
-      imageSize: stageSize,
+      imageSize: stageSize,        // pixelRatio=1.0과 동일 크기
+      initialParams: _beautyParams, // 슬라이더 초기값 유지
     ),
   );
 
-  if (out != null && mounted) {
-    setState(() => _editedBytes = out); // ← 결과 반영
+  if (result != null && mounted) {
+    setState(() {
+      _editedBytes   = result.image;   // 화면 갱신
+      _beautyParams  = result.params;  // 다음에 열 때 그대로
+      // _beautyBasePng는 바꾸지 않음 → 누적 방지
+    });
   }
 }
+
 
   Future<void> _loadOriginalBytes() async {
     if (widget.imagePath == null) return;
@@ -723,7 +730,7 @@ class _LmOverlayPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     // 선택된 얼굴 외 영역 암처리
-    if (dimOthers && selectedFace != null && selectedFace! < faceRects.length) {
+    /*if (dimOthers && selectedFace != null && selectedFace! < faceRects.length) {
       final sel = _toPx(faceRects[selectedFace!], paintSize);
       final full = Path()..addRect(Offset.zero & paintSize);
       final hole = Path()
@@ -733,6 +740,7 @@ class _LmOverlayPainter extends CustomPainter {
       final diff = Path.combine(PathOperation.difference, full, hole);
       canvas.drawPath(diff, Paint()..color = const Color(0x88000000));
     }
+    */
 
     // 랜드마크 점 (옵션)
     if (showLm) {
