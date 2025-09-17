@@ -88,20 +88,20 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // 저장 핵심 로직
 
   // RepaintBoundary → PNG 바이트 추출
-  Future<Uint8List> _exportEditedImageBytes() async {
-    final boundary =
-        _captureKey.currentContext?.findRenderObject()
-            as RenderRepaintBoundary?;
-    if (boundary == null) {
-      throw StateError('캡처 대상을 찾지 못했습니다.');
-    }
-    final ui.Image image = await boundary.toImage(pixelRatio: 2.5);
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    if (byteData == null) {
-      throw StateError('PNG 인코딩에 실패했습니다.');
-    }
-    return byteData.buffer.asUint8List();
+  // 기존 함수 교체
+Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
+  final boundary =
+      _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+  if (boundary == null) {
+    throw StateError('캡처 대상을 찾지 못했습니다.');
   }
+  final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
+  final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+  if (byteData == null) {
+    throw StateError('PNG 인코딩에 실패했습니다.');
+  }
+  return byteData.buffer.asUint8List();
+}
 
   // PNG 바이트를 Storage edited/* 경로에 업로드
   Future<({String url, String storagePath})> _uploadEditedPngBytes(
@@ -149,7 +149,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
     try {
       // 1) 현재 편집 화면 캡처
-      final png = await _exportEditedImageBytes();
+      final png = await _exportEditedImageBytes(); // 기본 pixelRatio=2.5 유지
 
       // 2) edited/* 경로로 업로드
       final uploaded = await _uploadEditedPngBytes(png);
@@ -455,63 +455,45 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // 단일 이미지 프리뷰 (보정본이 있으면 최우선으로 사용)
   // 단일 이미지 프리뷰
   Widget _buildSinglePreview(String path) {
-    if (_editedBytes != null) {
-      return Image.memory(
-        _editedBytes!,
-        fit: BoxFit.cover,
-        width: double.infinity,
-        height: double.infinity,
-      );
-    }
-
-    final isUrl = path.startsWith('http');
-    if (isUrl) {
-      return Image.network(
-        path,
-        fit: BoxFit.cover,
-        width: double.infinity,
-        height: double.infinity,
-        loadingBuilder: (c, child, progress) {
-          if (progress == null) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && !_isImageReady) {
-                setState(() => _isImageReady = true);
-              }
-            });
-            return child;
-          }
-          return const Center(
-            child: CircularProgressIndicator(color: Color(0xFF625F8C)),
-          );
-        },
-        errorBuilder: (_, __, ___) {
-          if (mounted && _isImageReady) {
-            setState(() => _isImageReady = false);
-          }
-          return const Center(
-            child: Text(
-              '이미지를 불러오지 못했습니다',
-              style: TextStyle(color: Color(0xFF625F8C)),
-            ),
-          );
-        },
-      );
-    } else {
-      if (!_isImageReady) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && !_isImageReady) {
-            setState(() => _isImageReady = true);
-          }
-        });
-      }
-      return Image.asset(
-        path,
-        fit: BoxFit.cover,
-        width: double.infinity,
-        height: double.infinity,
-      );
-    }
+  if (_editedBytes != null) {
+    return Image.memory(
+      _editedBytes!,
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: double.infinity,
+    );
   }
+
+  // 원본 보여주기
+  final isUrl = path.startsWith('http');
+  return isUrl
+      ? Image.network(
+          path,
+          fit: BoxFit.cover,
+          width: double.infinity,
+          height: double.infinity,
+          loadingBuilder: (c, child, progress) {
+            if (progress == null) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted && !_isImageReady) {
+                  setState(() => _isImageReady = true);
+                }
+              });
+              return child;
+            }
+            return const Center(
+              child: CircularProgressIndicator(color: Color(0xFF625F8C)),
+            );
+          },
+        )
+      : Image.asset(
+          path,
+          fit: BoxFit.cover,
+          width: double.infinity,
+          height: double.infinity,
+        );
+}
+
 
   Future<void> _smokeTestLoadTask() async {
     try {
@@ -640,36 +622,38 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   // 추후 슬라이더(피부/눈/코/입술) 넣을 자리
   Future<void> _openBeautyPanel() async {
-    if (_selectedFace == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('얼굴을 먼저 선택하세요.')));
-      return;
-    }
-
-    // 현재 스테이지를 PNG로 캡처해서 패널로 전달
-    final png = await _exportEditedImageBytes();
-
-    final Size stageSize = _captureKey.currentContext!.size!;
-    final out = await showModalBottomSheet<Uint8List>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => BeautyPanel(
-        srcPng: png,
-        faces468: _faces468,
-        selectedFace: _selectedFace!,
-        imageSize: stageSize,
-      ),
+  if (_selectedFace == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('얼굴을 먼저 선택하세요.')),
     );
-
-    if (out != null && mounted) {
-      setState(() => _editedBytes = out); // 결과 반영 → 프리뷰가 자동으로 보정본을 그림
-    }
+    return;
   }
+
+  // 1) 패널용 캡처는 pixelRatio=1.0 (논리 크기와 동일)
+  final png = await _exportEditedImageBytes(pixelRatio: 1.0);
+
+  // 2) 이때 imageSize는 stage의 논리 크기를 그대로 전달 (png와 동일해짐)
+  final Size stageSize = _captureKey.currentContext!.size!;
+
+  final out = await showModalBottomSheet<Uint8List>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.white,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (_) => BeautyPanel(
+      srcPng: png,
+      faces468: _faces468,
+      selectedFace: _selectedFace!,
+      imageSize: stageSize,
+    ),
+  );
+
+  if (out != null && mounted) {
+    setState(() => _editedBytes = out); // ← 결과 반영
+  }
+}
 
   Future<void> _loadOriginalBytes() async {
     if (widget.imagePath == null) return;

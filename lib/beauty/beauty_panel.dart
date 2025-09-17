@@ -53,21 +53,26 @@ class _BeautyPanelState extends State<BeautyPanel> {
                 ),
               ],
             ),
-            _slider(
-              '피부 부드럽게',
-              _params.skinStrength,
-              (v) => setState(() => _params.skinStrength = v),
-            ),
-            _slider(
-              '눈 확대',
-              _params.eyeAmount,
-              (v) => setState(() => _params.eyeAmount = v),
-            ),
-            _slider(
-              '입술 채도',
-              _params.lipSatGain,
-              (v) => setState(() => _params.lipSatGain = v),
-            ),
+            _slider01('피부 부드럽게', _params.skinStrength,
+  (v) => setState(() => _params.skinStrength = v),
+),
+_slider01('눈 확대', _params.eyeAmount,
+  (v) => setState(() => _params.eyeAmount = v),
+),
+_slider01('입술 채도', _params.lipSatGain,
+  (v) => setState(() => _params.lipSatGain = v),
+),
+
+// 각도(°)는 전용 헬퍼 사용
+_sliderDeg('입술 색조(°)', _params.hueShift,
+  (deg) => setState(() => _params.hueShift = deg),
+),
+
+_slider01('립 강도', _params.lipIntensity,
+  (v) => setState(() => _params.lipIntensity = v),
+),
+
+
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
@@ -82,16 +87,39 @@ class _BeautyPanelState extends State<BeautyPanel> {
     );
   }
 
-  Widget _slider(String label, double value, ValueChanged<double> onChanged) {
-    return Row(
-      children: [
-        SizedBox(width: 80, child: Text(label)),
-        Expanded(
-          child: Slider(value: value, min: 0, max: 1, onChanged: onChanged),
+  // 0~1 범위 공통 슬라이더
+Widget _slider01(String label, double value, ValueChanged<double> onChanged) {
+  return Row(
+    children: [
+      SizedBox(width: 90, child: Text(label)),
+      Expanded(
+        child: Slider(
+          min: 0, max: 1,
+          value: value.clamp(0.0, 1.0),
+          onChanged: (v) => onChanged(v.clamp(0.0, 1.0)),
         ),
-      ],
-    );
-  }
+      ),
+    ],
+  );
+}
+
+// 각도(0~360°)용 슬라이더: 내부적으로 0~1로 매핑
+Widget _sliderDeg(String label, double deg, ValueChanged<double> onChangedDeg) {
+  final uiValue = (deg / 360.0).clamp(0.0, 1.0);
+  return Row(
+    children: [
+      SizedBox(width: 90, child: Text(label)),
+      Expanded(
+        child: Slider(
+          min: 0, max: 1,
+          value: uiValue,
+          onChanged: (v) => onChangedDeg((v.clamp(0.0, 1.0)) * 360.0),
+        ),
+      ),
+    ],
+  );
+}
+
 
   Future<void> _apply() async {
     setState(() => _busy = true);
