@@ -13,6 +13,9 @@ import 'package:flutter/services.dart' show rootBundle, NetworkAssetBundle;
 import 'face_landmarker.dart';
 import '../beauty/beauty_panel.dart';
 import 'package:sharedalbumapp/beauty/beauty_controller.dart';
+import 'package:image/image.dart' as img;
+import '../edit_tools/image_ops.dart';
+import '../edit_tools/crop_overlay.dart';
 
 class EditViewScreen extends StatefulWidget {
   // albumId(파베) 또는 imagePath(로컬/URL) 중 하나만 있으면 동작
@@ -45,23 +48,26 @@ class EditViewScreen extends StatefulWidget {
 }
 
 class _EditViewScreenState extends State<EditViewScreen> {
+  // ▼ 4개 툴 전환: 0=자르기, 1=얼굴보정, 2=밝기, 3=회전/반전
+  int _selectedTool = 1; // 0=자르기,1=얼굴보정,2=밝기,3=회전/반전
+  Rect? _cropRectStage;
+  Size? _lastStageSize;
+  double _brightness = 0.0;
+  bool _brightnessApplying = false;
+
+  final List<IconData> _toolbarIcons = const [
+    Icons.crop,
+    Icons.face_retouching_natural,
+    Icons.brightness_6,
+    Icons.rotate_90_degrees_ccw,
+  ];
+
   final int _selectedIndex = 2;
-  int _selectedTool = 0;
 
   final _svc = SharedAlbumService.instance;
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
 
   final GlobalKey _captureKey = GlobalKey();
-
-  final List<IconData> _toolbarIcons = const [
-    Icons.mouse,
-    Icons.grid_on,
-    Icons.face_retouching_natural, // 👈 새 아이콘 (Material Icons 제공)
-    Icons.visibility,
-    Icons.text_fields,
-    Icons.architecture,
-    Icons.widgets,
-  ];
 
   // 상태/가드
   bool _isSaving = false; // 저장 연타 방지
@@ -71,7 +77,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // ⬇️ 여기 한 줄 추가
   bool _taskLoadedOk = false;
 
-  Uint8List? _editedBytes;   // ← 결과 PNG (화면에 보여줄 것)
+  Uint8List? _editedBytes; // ← 결과 PNG (화면에 보여줄 것)
   Uint8List? _originalBytes; // 이미지 원본 바이트
   bool _modelLoaded = false; // 모델 로드 여부
   List<List<Offset>> _faces468 = []; // 결과 포인트(정규화)
@@ -85,24 +91,26 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   BeautyParams _beautyParams = BeautyParams();
   Uint8List? _beautyBasePng; // 보정/저장용 결과
+  Uint8List? _brightnessBaseBytes;
 
   // 저장 핵심 로직
 
   // RepaintBoundary → PNG 바이트 추출
   // 기존 함수 교체
-Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
-  final boundary =
-      _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-  if (boundary == null) {
-    throw StateError('캡처 대상을 찾지 못했습니다.');
+  Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
+    final boundary =
+        _captureKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
+    if (boundary == null) {
+      throw StateError('캡처 대상을 찾지 못했습니다.');
+    }
+    final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    if (byteData == null) {
+      throw StateError('PNG 인코딩에 실패했습니다.');
+    }
+    return byteData.buffer.asUint8List();
   }
-  final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
-  final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-  if (byteData == null) {
-    throw StateError('PNG 인코딩에 실패했습니다.');
-  }
-  return byteData.buffer.asUint8List();
-}
 
   // PNG 바이트를 Storage edited/* 경로에 업로드
   Future<({String url, String storagePath})> _uploadEditedPngBytes(
@@ -414,6 +422,14 @@ Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
             children: [
               if (widget.imagePath != null)
                 _buildSinglePreview(widget.imagePath!),
+              if (_selectedTool == 0)
+                Positioned.fill(
+                  child: CropOverlay(
+                    initRect: _cropRectStage,
+                    onChanged: (r) => _cropRectStage = r,
+                    onStageSize: (s) => _lastStageSize = s,
+                  ),
+                ),
 
               if (_isFaceEditMode && _faces468.isNotEmpty)
                 IgnorePointer(
@@ -456,45 +472,44 @@ Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
   // 단일 이미지 프리뷰 (보정본이 있으면 최우선으로 사용)
   // 단일 이미지 프리뷰
   Widget _buildSinglePreview(String path) {
-  if (_editedBytes != null) {
-    return Image.memory(
-      _editedBytes!,
-      fit: BoxFit.cover,
-      width: double.infinity,
-      height: double.infinity,
-    );
+    if (_editedBytes != null) {
+      return Image.memory(
+        _editedBytes!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    }
+
+    // 원본 보여주기
+    final isUrl = path.startsWith('http');
+    return isUrl
+        ? Image.network(
+            path,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+            loadingBuilder: (c, child, progress) {
+              if (progress == null) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted && !_isImageReady) {
+                    setState(() => _isImageReady = true);
+                  }
+                });
+                return child;
+              }
+              return const Center(
+                child: CircularProgressIndicator(color: Color(0xFF625F8C)),
+              );
+            },
+          )
+        : Image.asset(
+            path,
+            fit: BoxFit.cover,
+            width: double.infinity,
+            height: double.infinity,
+          );
   }
-
-  // 원본 보여주기
-  final isUrl = path.startsWith('http');
-  return isUrl
-      ? Image.network(
-          path,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          height: double.infinity,
-          loadingBuilder: (c, child, progress) {
-            if (progress == null) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                if (mounted && !_isImageReady) {
-                  setState(() => _isImageReady = true);
-                }
-              });
-              return child;
-            }
-            return const Center(
-              child: CircularProgressIndicator(color: Color(0xFF625F8C)),
-            );
-          },
-        )
-      : Image.asset(
-          path,
-          fit: BoxFit.cover,
-          width: double.infinity,
-          height: double.infinity,
-        );
-}
-
 
   Future<void> _smokeTestLoadTask() async {
     try {
@@ -518,42 +533,233 @@ Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
     }
   }
 
-  // 기본(메인) 툴바
   Widget _buildMainToolbar() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: List.generate(_toolbarIcons.length, (index) {
-        final isSelected = _selectedTool == index;
-        return GestureDetector(
-          onTap: () {
-            // 얼굴보정 아이콘(예: index == 2)을 누르면 모드 전환
-            if (index == 2) {
-              setState(() => _isFaceEditMode = true);
-              // 이미 결과 있으면 재인식 생략
-              if (_faces468.isEmpty) {
-                _smokeTestLoadTask();
-                _runFaceDetect();
-              }
-            } else {
-              setState(() => _selectedTool = index);
-            }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: List.generate(_toolbarIcons.length, (i) {
+            final sel = _selectedTool == i;
+            return GestureDetector(
+              onTap: () async {
+                if (i == 1) {
+                  setState(() => _isFaceEditMode = true);
+                  if (_faces468.isEmpty) {
+                    _smokeTestLoadTask();
+                    _runFaceDetect();
+                  }
+                } else {
+                  // ▼ 밝기 탭 진입: 기준 이미지와 슬라이더 0으로 초기화
+                  if (i == 2) {
+                    _brightness = 0.0;
+                    _brightnessBaseBytes =
+                        await _currentBytes(); // 현재 화면의 이미지(원본 또는 기존편집본)를 베이스로 고정
+                  }
+                  setState(() {
+                    _isFaceEditMode = false;
+                    _selectedTool = i;
+                  });
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: sel ? const Color(0xFF397CFF) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  _toolbarIcons[i],
+                  color: sel ? Colors.white : Colors.black87,
+                  size: 22,
+                ),
+              ),
+            );
+          }),
+        ),
+        const SizedBox(height: 8),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: switch (_selectedTool) {
+            0 => _cropPanel(),
+            2 => _brightnessPanel(),
+            3 => _rotatePanel(),
+            _ => const SizedBox.shrink(),
           },
-          child: Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: isSelected ? const Color(0xFF397CFF) : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(
-              _toolbarIcons[index],
-              color: isSelected ? Colors.white : Colors.black87,
-              size: 22,
-            ),
+        ),
+      ],
+    );
+  }
+
+  Widget _cropPanel() => Row(
+    key: const ValueKey('crop'),
+    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    children: [
+      _pill('초기화', () async {
+        await _resetToOriginal(); // ← 여기!
+      }),
+      _pill('맞춤', () {
+        if (_lastStageSize == null) return;
+        final s = _lastStageSize!;
+        setState(
+          () => _cropRectStage = Rect.fromLTWH(
+            s.width * 0.1,
+            s.height * 0.1,
+            s.width * 0.8,
+            s.height * 0.8,
           ),
         );
       }),
-    );
+      _pill('적용', _applyCrop),
+    ],
+  );
+  Widget _brightnessPanel() => Column(
+    key: const ValueKey('brightness'),
+    children: [
+      Row(
+        children: [
+          const SizedBox(width: 8),
+          const Icon(Icons.brightness_low, size: 18),
+
+          // ▼ 가운데에 '0' 표시막대가 있는 슬라이더
+          Expanded(
+            child: SizedBox(
+              height: 36,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 4, // (선택) 트랙 두께
+                    ),
+                    child: Slider(
+                      value: _brightness, // -0.5 ~ 0.5
+                      min: -0.5,
+                      max: 0.5,
+                      divisions: 20,
+                      label: _brightness.toStringAsFixed(2),
+                      onChanged: (v) => setState(() => _brightness = v),
+                      onChangeEnd: (_) => _applyBrightness(),
+                    ),
+                  ),
+
+                  // ▼ 중앙(값=0)에만 얇은 세로 라인 표시
+                  IgnorePointer(
+                    // 슬라이더 제스처 방해하지 않도록
+                    child: Container(
+                      width: 2,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade500,
+                        borderRadius: BorderRadius.circular(1),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const Icon(Icons.brightness_high, size: 18),
+          const SizedBox(width: 8),
+        ],
+      ),
+
+      if (_brightnessApplying)
+        const SizedBox(height: 2, child: LinearProgressIndicator()),
+    ],
+  );
+
+  Widget _rotatePanel() => Row(
+    key: const ValueKey('rotate'),
+    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    children: [
+      _pill('왼쪽 90°', () => _applyRotate(-90)),
+      _pill('오른쪽 90°', () => _applyRotate(90)),
+      _pill('좌우 반전', _applyFlipH),
+      _pill('상하 반전', _applyFlipV),
+    ],
+  );
+
+  Future<Uint8List> _currentBytes() async {
+    if (_editedBytes != null) return _editedBytes!;
+    if (_originalBytes == null) await _loadOriginalBytes();
+    return _editedBytes ?? _originalBytes!;
   }
+
+  Future<void> _applyCrop() async {
+    if (_cropRectStage == null || _lastStageSize == null) return;
+    final bytes = await _currentBytes();
+    final out = ImageOps.cropFromStageRect(
+      srcBytes: bytes,
+      stageCropRect: _cropRectStage!,
+      stageSize: _lastStageSize!,
+    );
+    setState(() {
+      _editedBytes = out;
+      _cropRectStage = null;
+    });
+  }
+
+  Future<void> _applyBrightness() async {
+    if (_brightnessApplying) return;
+    _brightnessApplying = true;
+    setState(() {});
+
+    try {
+      // ▼ 베이스 확보: 없으면 현재 이미지로
+      final base = _brightnessBaseBytes ?? await _currentBytes();
+
+      // ▼ 0이면 베이스 그대로 사용
+      if (_brightness.abs() < 1e-6) {
+        setState(() => _editedBytes = base);
+      } else {
+        final out = ImageOps.adjustBrightness(base, _brightness);
+        setState(() => _editedBytes = out);
+      }
+    } finally {
+      _brightnessApplying = false;
+      setState(() {});
+    }
+  }
+
+  Future<void> _resetToOriginal() async {
+    await _loadOriginalBytes(); // _originalBytes 보장
+    setState(() {
+      _editedBytes = null; // 프리뷰가 원본을 그리도록
+      _cropRectStage = null; // 오버레이도 초기화
+      _brightness = 0.0; // 슬라이더 센터
+      _brightnessBaseBytes = null; // 다음에 밝기 탭 들어가면 다시 베이스 잡게
+      _beautyBasePng = null; // (얼굴보정도 필요시 다시 베이스 만들도록)
+    });
+  }
+
+  Future<void> _applyRotate(int deg) async {
+    final bytes = await _currentBytes();
+    setState(() => _editedBytes = ImageOps.rotate(bytes, deg));
+  }
+
+  Future<void> _applyFlipH() async {
+    final bytes = await _currentBytes();
+    setState(() => _editedBytes = ImageOps.flipHorizontal(bytes));
+  }
+
+  Future<void> _applyFlipV() async {
+    final bytes = await _currentBytes();
+    setState(() => _editedBytes = ImageOps.flipVertical(bytes));
+  }
+
+  Widget _pill(String label, VoidCallback onTap) => GestureDetector(
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: const Color(0xFFF2F4FF),
+      ),
+      child: Text(label, style: const TextStyle(fontSize: 12)),
+    ),
+  );
 
   // 얼굴보정 전용 툴바 (아이콘들은 임시 플레이스홀더)
   // 교체: _buildFaceEditToolbar()
@@ -624,43 +830,43 @@ Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
 
   // 추후 슬라이더(피부/눈/코/입술) 넣을 자리
   Future<void> _openBeautyPanel() async {
-  if (_selectedFace == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('얼굴을 먼저 선택하세요.')),
-    );
-    return;
+    if (_selectedFace == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('얼굴을 먼저 선택하세요.')));
+      return;
+    }
+
+    // 기준 PNG는 한 번만 만들기 (pixelRatio=1.0)
+    _beautyBasePng ??= await _exportEditedImageBytes(pixelRatio: 1.0);
+    final Size stageSize = _captureKey.currentContext!.size!;
+
+    // 결과: (image, params) 레코드로 받기
+    final result =
+        await showModalBottomSheet<({Uint8List image, BeautyParams params})>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.white,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (_) => BeautyPanel(
+            srcPng: _beautyBasePng!, // 항상 기준에서 시작 → 누적 방지
+            faces468: _faces468,
+            selectedFace: _selectedFace!,
+            imageSize: stageSize, // pixelRatio=1.0과 동일 크기
+            initialParams: _beautyParams, // 슬라이더 초기값 유지
+          ),
+        );
+
+    if (result != null && mounted) {
+      setState(() {
+        _editedBytes = result.image; // 화면 갱신
+        _beautyParams = result.params; // 다음에 열 때 그대로
+        // _beautyBasePng는 바꾸지 않음 → 누적 방지
+      });
+    }
   }
-
-  // 기준 PNG는 한 번만 만들기 (pixelRatio=1.0)
-  _beautyBasePng ??= await _exportEditedImageBytes(pixelRatio: 1.0);
-  final Size stageSize = _captureKey.currentContext!.size!;
-
-  // 결과: (image, params) 레코드로 받기
-  final result = await showModalBottomSheet<({Uint8List image, BeautyParams params})>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.white,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    builder: (_) => BeautyPanel(
-      srcPng: _beautyBasePng!,     // 항상 기준에서 시작 → 누적 방지
-      faces468: _faces468,
-      selectedFace: _selectedFace!,
-      imageSize: stageSize,        // pixelRatio=1.0과 동일 크기
-      initialParams: _beautyParams, // 슬라이더 초기값 유지
-    ),
-  );
-
-  if (result != null && mounted) {
-    setState(() {
-      _editedBytes   = result.image;   // 화면 갱신
-      _beautyParams  = result.params;  // 다음에 열 때 그대로
-      // _beautyBasePng는 바꾸지 않음 → 누적 방지
-    });
-  }
-}
-
 
   Future<void> _loadOriginalBytes() async {
     if (widget.imagePath == null) return;
@@ -816,3 +1022,5 @@ class _LmOverlayPainter extends CustomPainter {
       old.showLm != showLm ||
       old.dimOthers != dimOthers;
 }
+
+enum _ActiveHandle { none, move, tl, tr, bl, br, top, right, bottom, left }
