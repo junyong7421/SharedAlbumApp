@@ -1,23 +1,26 @@
-// lib/beauty/beauty_controller.dart
 import 'dart:typed_data';
 import 'dart:ui';
-import 'package:flutter/foundation.dart';
+
 import 'face_regions.dart';
 import 'filters.dart';
 
 class BeautyParams {
-  double skinStrength; // 0~1
-  double eyeAmount; // 0~1
-  double lipSatGain; // 0~1
-  double lipIntensity; // 0~1
-  double hueShift; // deg
+  double skinStrength;   // 0~1
+  double eyeAmount;      // 0~1
+  double lipSatGain;     // 0~1
+  double lipIntensity;   // 0~1
+  double hueShift;       // deg
+  double noseAmount;     // -1~+1 (음수=축소, 양수=확대)
+  double faceAmount;     // -1~+1
 
   BeautyParams({
     this.skinStrength = 0.35,
     this.eyeAmount = 0.25,
     this.lipSatGain = 0.25,
     this.lipIntensity = 0.6,
-    this.hueShift = 0,
+    this.hueShift = 0.0,
+    this.noseAmount = 0.0,
+    this.faceAmount = 0.0,
   });
 
   BeautyParams copyWith({
@@ -26,19 +29,21 @@ class BeautyParams {
     double? lipSatGain,
     double? lipIntensity,
     double? hueShift,
-  }) => BeautyParams(
-    skinStrength: skinStrength ?? this.skinStrength,
-    eyeAmount: eyeAmount ?? this.eyeAmount,
-    lipSatGain: lipSatGain ?? this.lipSatGain,
-    lipIntensity: lipIntensity ?? this.lipIntensity,
-    hueShift: hueShift ?? this.hueShift,
-  );
+    double? noseAmount,
+    double? faceAmount,
+  }) =>
+      BeautyParams(
+        skinStrength: skinStrength ?? this.skinStrength,
+        eyeAmount: eyeAmount ?? this.eyeAmount,
+        lipSatGain: lipSatGain ?? this.lipSatGain,
+        lipIntensity: lipIntensity ?? this.lipIntensity,
+        hueShift: hueShift ?? this.hueShift,
+        noseAmount: noseAmount ?? this.noseAmount,
+        faceAmount: faceAmount ?? this.faceAmount,
+      );
 }
 
-// (선택) import 'package:flutter/foundation.dart'; // compute 안 쓰면 없어도 됨
-
 class BeautyController {
-  /// 메인 Isolate에서 바로 적용 (간단/안정)
   Future<Uint8List> applyAll({
     required Uint8List srcPng,
     required List<List<Offset>> faces468,
@@ -47,7 +52,7 @@ class BeautyController {
     required BeautyParams params,
   }) async {
     final job = _Job(srcPng, faces468, selectedFace, imageSize, params);
-    return _apply(job); // ← compute 대신 직접 호출
+    return _apply(job);
   }
 }
 
@@ -57,26 +62,20 @@ class _Job {
   final int selectedFace;
   final Size imageSize;
   final BeautyParams params;
-  _Job(
-    this.srcPng,
-    this.faces468,
-    this.selectedFace,
-    this.imageSize,
-    this.params,
-  );
+
+  _Job(this.srcPng, this.faces468, this.selectedFace, this.imageSize, this.params);
 }
 
-// 이름만 바꿔서 내부 호출
 Future<Uint8List> _apply(_Job j) async {
   final width = j.imageSize.width.toInt();
   final height = j.imageSize.height.toInt();
 
-  // 1) 좌표 변환
+  // 1) 선택 얼굴의 이미지 좌표
   final ptsImg = j.faces468[j.selectedFace]
       .map((p) => Offset(p.dx * width, p.dy * height))
       .toList();
 
-  // 2) 마스크들 만들기 (지금 로직 그대로)
+  // 2) 입술/피부 마스크
   final lipPath = polyPathFrom(ptsImg, lipsOuter);
 
   double minX = width.toDouble(), minY = height.toDouble(), maxX = 0, maxY = 0;
@@ -93,16 +92,12 @@ Future<Uint8List> _apply(_Job j) async {
         const Radius.circular(20),
       ),
     );
-  final lipPathInv = Path.combine(
-    PathOperation.difference,
-    faceRectPath,
-    lipPath,
-  );
+  final lipPathInv = Path.combine(PathOperation.difference, faceRectPath, lipPath);
 
-  final lipMask = await rasterizeMask(j.imageSize, lipPath, feather: 2);
+  final lipMask  = await rasterizeMask(j.imageSize, lipPath,   feather: 2);
   final skinMask = await rasterizeMask(j.imageSize, lipPathInv, feather: 4);
 
-  // 3) 눈 중심
+  // 3) 편의 포인트들
   Offset _center(List<int> idx) {
     double sx = 0, sy = 0;
     for (final i in idx) {
@@ -112,11 +107,28 @@ Future<Uint8List> _apply(_Job j) async {
     return Offset(sx / idx.length, sy / idx.length);
   }
 
+  // 눈
   final lc = _center(leftEyeRing);
   final rc = _center(rightEyeRing);
-  final eyeRadius = ((maxX - minX) * 0.1).clamp(12, 48);
+  final eyeRadius = ((maxX - minX) * 0.10).clamp(12, 48).toDouble();
 
-  // 4) 필터들 적용 (이미 작성한 filters.dart 사용)
+  // 얼굴 중심/반경
+  final faceCenter = Offset((minX + maxX) / 2, (minY + maxY) / 2);
+  final faceRadius = (maxX - minX) * 0.55; // bbox보다 살짝 크게
+
+  // 코 중심(대부분 FaceMesh 1번이 코팁)
+  Offset _noseCenter() {
+    const candidates = [1, 2, 4, 5, 197];
+    for (final i in candidates) {
+      if (i >= 0 && i < ptsImg.length) return ptsImg[i];
+    }
+    return Offset(faceCenter.dx, minY + (maxY - minY) * 0.58);
+  }
+
+  final noseC = _noseCenter();
+  final noseRadius = (maxX - minX) * 0.18;
+
+  // 4) 필터 적용
   var cur = await smoothSkin(
     bytes: j.srcPng,
     maskAlpha: skinMask,
@@ -129,11 +141,37 @@ Future<Uint8List> _apply(_Job j) async {
     bytes: cur,
     leftCenter: lc,
     rightCenter: rc,
-    radius: eyeRadius.toDouble(),
+    radius: eyeRadius,
     amount: j.params.eyeAmount,
     width: width,
     height: height,
   );
+
+  // 코 크기 (음수=축소, 양수=확대)
+  if (j.params.noseAmount.abs() > 0.001) {
+    cur = await resizeRegionRadial(
+      bytes: cur,
+      center: noseC,
+      radius: noseRadius,
+      amount: j.params.noseAmount.clamp(-1.0, 1.0),
+      width: width,
+      height: height,
+    );
+  }
+
+  // 얼굴 전체 크기 (틀 포함)
+  if (j.params.faceAmount.abs() > 0.001) {
+    cur = await resizeFaceBox(
+      bytes: cur,
+      width: width,
+      height: height,
+      minX: minX,
+      minY: minY,
+      maxX: maxX,
+      maxY: maxY,
+      amount: j.params.faceAmount.clamp(-1.0, 1.0),
+    );
+  }
 
   cur = await tintLips(
     bytes: cur,
