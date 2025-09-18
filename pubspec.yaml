@@ -19,6 +19,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   google_sign_in: ^6.1.0
   shared_preferences: ^2.2.2
+  image: ^4.1.0
 
 dev_dependencies:
   flutter_test:
@@ -37,3 +38,4 @@ flutter:
     - assets/images/
     - assets/images/google_logo.png
     - assets/icons/shared_album_list.png
+    - assets/mediapipe/face_landmarker.task
