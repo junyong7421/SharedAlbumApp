@@ -1,12 +1,226 @@
 // lib/screens/edit_screen.dart
 import 'package:cloud_firestore/cloud_firestore.dart' as firestore;
+import 'package:cloud_firestore/cloud_firestore.dart'; // ✅ 하트용 단일 포토 문서 구독
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
 import 'edit_view_screen.dart';
 import 'edit_album_list_screen.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import '../services/shared_album_service.dart';
+
+// ===================== UID → 항상 같은 색 (안정 랜덤) =====================
+int _stableHash(String s) {
+  int h = 5381;
+  for (int i = 0; i < s.length; i++) {
+    h = ((h << 5) + h) ^ s.codeUnitAt(i);
+  }
+  return h & 0x7fffffff;
+}
+
+Color colorForUid(
+  String uid, {
+  double saturation = 0.75,
+  double lightness = 0.55,
+}) {
+  final h = _stableHash(uid) % 360;
+  return HSLColor.fromAHSL(1.0, h.toDouble(), saturation, lightness).toColor();
+}
+
+// ===================== SegmentedHeart (분할 채우는 하트) =====================
+class SegmentedHeart extends StatelessWidget {
+  final int totalSlots;           // m명이면 m
+  final List<Color> filledColors; // 길이=m
+  final double size;
+  final bool isLikedByMe;
+  final VoidCallback onTap;
+
+  const SegmentedHeart({
+    super.key,
+    required this.totalSlots,
+    required this.filledColors,
+    required this.size,
+    required this.isLikedByMe,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: CustomPaint(
+        size: Size.square(size),
+        painter: _HeartPainter(
+          totalSlots: totalSlots,
+          filledColors: filledColors,
+          outlineColor: isLikedByMe ? const Color(0xFF625F8C) : Colors.grey.shade400,
+        ),
+      ),
+    );
+  }
+}
+
+class _HeartPainter extends CustomPainter {
+  final int totalSlots;
+  final List<Color> filledColors;
+  final Color outlineColor;
+
+  _HeartPainter({
+    required this.totalSlots,
+    required this.filledColors,
+    required this.outlineColor,
+  });
+
+  Path _heartPath(Size s) {
+    final w = s.width, h = s.height;
+    final p = Path();
+    final top = Offset(w * 0.5, h * 0.28);
+    final leftCtrl1 = Offset(w * 0.15, h * 0.05);
+    final leftCtrl2 = Offset(w * 0.02, h * 0.35);
+    final left = Offset(w * 0.25, h * 0.58);
+    final rightCtrl1 = Offset(w * 0.98, h * 0.35);
+    final rightCtrl2 = Offset(w * 0.85, h * 0.05);
+    final right = Offset(w * 0.75, h * 0.58);
+    final bottom = Offset(w * 0.5, h * 0.95);
+
+    p.moveTo(top.dx, top.dy);
+    p.cubicTo(leftCtrl1.dx, leftCtrl1.dy, leftCtrl2.dx, leftCtrl2.dy, left.dx, left.dy);
+    p.cubicTo(w * 0.25, h * 0.80, w * 0.40, h * 0.88, bottom.dx, bottom.dy);
+    p.cubicTo(w * 0.60, h * 0.88, w * 0.75, h * 0.80, right.dx, right.dy);
+    p.cubicTo(rightCtrl2.dx, rightCtrl2.dy, rightCtrl1.dx, rightCtrl1.dy, top.dx, top.dy);
+    p.close();
+    return p;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = _heartPath(size);
+
+    if (filledColors.isNotEmpty && totalSlots > 0) {
+      final step = 1.0 / totalSlots;
+      final stops = <double>[];
+      final colors = <Color>[];
+
+      for (int i = 0; i < filledColors.length; i++) {
+        final start = (step * i).clamp(0.0, 1.0);
+        final end = (step * (i + 1)).clamp(0.0, 1.0);
+        colors.add(filledColors[i]);
+        colors.add(filledColors[i]);
+        stops.add(start);
+        stops.add(end);
+      }
+
+      final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+      final shader = SweepGradient(
+        startAngle: -3.14159 / 2,
+        endAngle: 3 * 3.14159 / 2,
+        colors: colors,
+        stops: stops,
+      ).createShader(rect);
+
+      final fillPaint = Paint()
+        ..shader = shader
+        ..style = PaintingStyle.fill;
+
+      canvas.save();
+      canvas.clipPath(path);
+      canvas.drawRect(rect, fillPaint);
+      canvas.restore();
+    }
+
+    final stroke = Paint()
+      ..color = outlineColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = size.shortestSide * 0.07
+      ..isAntiAlias = true;
+
+    canvas.drawPath(path, stroke);
+  }
+
+  @override
+  bool shouldRepaint(covariant _HeartPainter old) {
+    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor) return true;
+    if (filledColors.length != old.filledColors.length) return true;
+    for (var i = 0; i < filledColors.length; i++) {
+      if (filledColors[i].value != old.filledColors[i].value) return true;
+    }
+    return false;
+  }
+}
+
+// ===================== HeartForPhoto (좋아요 하트: photoId 기준) =====================
+// albums/{albumId}/photos/{photoId}.likedBy 를 실시간 구독해 렌더/토글
+class HeartForPhoto extends StatelessWidget {
+  final String albumId;
+  final String photoId;
+  final double size;
+  final SharedAlbumService svc;
+  final String myUid;
+
+  const HeartForPhoto({
+    super.key,
+    required this.albumId,
+    required this.photoId,
+    required this.size,
+    required this.svc,
+    required this.myUid,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final doc = FirebaseFirestore.instance
+        .collection('albums')
+        .doc(albumId)
+        .collection('photos')
+        .doc(photoId);
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: doc.snapshots(),
+      builder: (context, snap) {
+        if (!snap.hasData || !snap.data!.exists) {
+          return SegmentedHeart(
+            totalSlots: 0,
+            filledColors: const [],
+            size: size,
+            isLikedByMe: false,
+            onTap: () {},
+          );
+        }
+
+        final data = snap.data!.data()!;
+        final List<dynamic> likedDyn = (data['likedBy'] ?? []) as List<dynamic>;
+        final likedUids = likedDyn.map((e) => e.toString()).toList();
+        final isLikedByMe = likedUids.contains(myUid);
+
+        final m = likedUids.length;
+        final totalSlots = m == 0 ? 0 : (m > 12 ? 12 : m); // 가독성 최대 12조각
+        final colors = likedUids.map((u) => colorForUid(u)).toList();
+
+        return SegmentedHeart(
+          totalSlots: totalSlots,
+          filledColors: colors.take(totalSlots).toList(),
+          size: size,
+          isLikedByMe: isLikedByMe,
+          onTap: () async {
+            try {
+              await svc.toggleLike(
+                uid: myUid,
+                albumId: albumId,
+                photoId: photoId,
+                like: !isLikedByMe,
+              );
+            } catch (e) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('좋아요 실패: $e')),
+              );
+            }
+          },
+        );
+      },
+    );
+  }
+}
 
 class EditScreen extends StatefulWidget {
   final String albumName;
@@ -170,6 +384,7 @@ class _EditScreenState extends State<EditScreen> {
                     final EditingInfo? current = hasImages ? list[_currentIndex] : null;
                     final String? url = current?.photoUrl;
                     final String? photoId = current?.photoId;
+                    final String? originalPhotoId = current?.originalPhotoId;
 
                     // 현재 프리뷰 이미지의 고유 키 (재사용/캐시 충돌 방지)
                     final String imageKey = [
@@ -181,12 +396,16 @@ class _EditScreenState extends State<EditScreen> {
                       current?.photoUrl ?? '',
                     ].join('_');
 
-                    // 프레즌스 요약 표시용 키
+                    // 프레즌스 요약 표시용 키 (EditViewScreen과 우선순위 통일: original → photo → edited)
                     final String? presenceKey = current == null
                         ? null
-                        : (current.photoId ?? current.editedId ?? current.originalPhotoId);
+                        : (current.originalPhotoId ?? current.photoId ?? current.editedId);
 
-                    // 화살표 + 중앙 사진
+                    // ✅ 좋아요 타깃: 원본 우선(원본 문서에 likedBy를 저장)
+                    final String? likeTargetPhotoId =
+                        (originalPhotoId != null && originalPhotoId.isNotEmpty) ? originalPhotoId : photoId;
+
+                    // 화살표 + 중앙 사진 (+ 하트 오버레이)
                     final preview = Center(
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -201,91 +420,111 @@ class _EditScreenState extends State<EditScreen> {
                             color: hasImages ? null : Colors.black26,
                           ),
                           const SizedBox(width: 8),
-                          GestureDetector(
-                            onTap: hasImages
-                                ? () async {
-                                    if (_isNavigating) return;
-                                    _isNavigating = true;
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              GestureDetector(
+                                onTap: hasImages
+                                    ? () async {
+                                        // 중복 진입 가드
+                                        if (_isNavigating) return;
+                                        _isNavigating = true;
 
-                                    // 현재 항목 로컬 변수로 캡처
-                                    final String? _editedId = current?.editedId;
-                                    final String? _originalPhotoId = current?.originalPhotoId;
-                                    final String? _photoId = photoId;
-                                    final String? _url = url;
+                                        // 현재 항목 로컬 변수로 캡처
+                                        final String? _editedId = current?.editedId;
+                                        final String? _originalPhotoId = current?.originalPhotoId;
+                                        final String? _photoId = photoId;
+                                        final String? _url = url;
 
-                                    if (_url == null || _url.isEmpty) {
-                                      _isNavigating = false;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text('이미지 URL이 유효하지 않습니다.')),
-                                      );
-                                      return;
-                                    }
+                                        if (_url == null || _url.isEmpty) {
+                                          _isNavigating = false;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(content: Text('이미지 URL이 유효하지 않습니다.')),
+                                          );
+                                          return;
+                                        }
 
-                                    try {
-                                      await _svc.setEditing(
-                                        uid: _uid,
-                                        albumId: widget.albumId,
-                                        photoId: _photoId, // 안정 키
-                                        photoUrl: _url,
-                                        source: (_editedId ?? '').isNotEmpty ? 'edited' : 'original',
-                                        editedId: _editedId,
-                                        originalPhotoId: _originalPhotoId ?? _photoId,
-                                      );
-                                    } catch (e) {
-                                      _isNavigating = false;
-                                      if (!mounted) return;
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text('편집 세션 생성 실패: $e')),
-                                      );
-                                      return;
-                                    }
+                                        try {
+                                          await _svc.setEditing(
+                                            uid: _uid,
+                                            albumId: widget.albumId,
+                                            photoId: _photoId, // 안정 키
+                                            photoUrl: _url,
+                                            source: (_editedId ?? '').isNotEmpty ? 'edited' : 'original',
+                                            editedId: _editedId,
+                                            originalPhotoId: _originalPhotoId ?? _photoId,
+                                          );
+                                        } catch (e) {
+                                          _isNavigating = false;
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(content: Text('편집 세션 생성 실패: $e')),
+                                          );
+                                          return;
+                                        }
 
-                                    if (!mounted) {
-                                      _isNavigating = false;
-                                      return;
-                                    }
+                                        if (!mounted) {
+                                          _isNavigating = false;
+                                          return;
+                                        }
 
-                                    // 편집 화면으로 이동
-                                    await Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => EditViewScreen(
-                                          albumName: widget.albumName,
-                                          albumId: widget.albumId,
-                                          imagePath: _url,
-                                          editedId: _editedId,
-                                          originalPhotoId: _originalPhotoId,
-                                          photoId: _photoId,
-                                        ),
-                                      ),
-                                    );
+                                        // 편집 화면으로 이동 (세션 생성에 성공했을 때만)
+                                        await Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) => EditViewScreen(
+                                              albumName: widget.albumName,
+                                              albumId: widget.albumId,
+                                              imagePath: _url,
+                                              editedId: _editedId,
+                                              originalPhotoId: _originalPhotoId,
+                                              photoId: _photoId,
+                                            ),
+                                          ),
+                                        );
 
-                                    _isNavigating = false;
-                                  }
-                                : null,
-                            child: Container(
-                              width: 140,
-                              height: 160,
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF6F9FF),
-                                borderRadius: BorderRadius.circular(20),
-                                boxShadow: const [
-                                  BoxShadow(color: Colors.black12, blurRadius: 5, offset: Offset(2, 2)),
-                                ],
+                                        _isNavigating = false;
+                                      }
+                                    : null,
+                                child: Container(
+                                  width: 140,
+                                  height: 160,
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF6F9FF),
+                                    borderRadius: BorderRadius.circular(20),
+                                    boxShadow: const [
+                                      BoxShadow(color: Colors.black12, blurRadius: 5, offset: Offset(2, 2)),
+                                    ],
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: hasImages
+                                        ? Image.network(
+                                            url!,
+                                            fit: BoxFit.cover,
+                                            key: ValueKey(imageKey), // 고유 키
+                                            gaplessPlayback: true, // 전환 시 깜빡임 방지
+                                          )
+                                        : _emptyPreview(),
+                                  ),
+                                ),
                               ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: hasImages
-                                    ? Image.network(
-                                        url!,
-                                        fit: BoxFit.cover,
-                                        key: ValueKey(imageKey),
-                                        gaplessPlayback: true,
-                                      )
-                                    : _emptyPreview(),
-                              ),
-                            ),
+
+                              // ✅ 하트 오버레이 (원본 photoId 또는 photoId가 있을 때만 표시)
+                              if (likeTargetPhotoId != null && likeTargetPhotoId.isNotEmpty)
+                                Positioned(
+                                  top: -6,
+                                  right: -6,
+                                  child: HeartForPhoto(
+                                    albumId: widget.albumId,
+                                    photoId: likeTargetPhotoId,
+                                    size: 26,
+                                    svc: _svc,
+                                    myUid: _uid,
+                                  ),
+                                ),
+                            ],
                           ),
                           const SizedBox(width: 8),
                           IconButton(
@@ -409,22 +648,43 @@ class _EditScreenState extends State<EditScreen> {
                                         itemCount: visible.length,
                                         itemBuilder: (_, i) {
                                           final it = visible[i];
-                                          final thumbKey =
-                                              'edited_${it.id}_${it.originalPhotoId ?? ''}_${it.url}';
+                                          final thumbKey = 'edited_${it.id}_${it.originalPhotoId ?? ''}_${it.url}';
 
-                                          return GestureDetector(
-                                            onTap: () => _showEditedActions(context, it),
-                                            child: ClipRRect(
-                                              borderRadius: BorderRadius.circular(12),
-                                              child: Image.network(
-                                                it.url,
-                                                width: 100,
-                                                height: 100,
-                                                fit: BoxFit.cover,
-                                                key: ValueKey(thumbKey),
-                                                gaplessPlayback: true,
+                                          // ✅ 좋아요 타깃: 편집본은 원본 photoId가 있을 때만 표시(원본 문서에 좋아요 저장)
+                                          final likePhotoId = (it.originalPhotoId ?? '').isNotEmpty
+                                              ? it.originalPhotoId!
+                                              : null;
+
+                                          return Stack(
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              GestureDetector(
+                                                onTap: () => _showEditedActions(context, it),
+                                                child: ClipRRect(
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  child: Image.network(
+                                                    it.url,
+                                                    width: 100,
+                                                    height: 100,
+                                                    fit: BoxFit.cover,
+                                                    key: ValueKey(thumbKey), // 고유 키
+                                                    gaplessPlayback: true,
+                                                  ),
+                                                ),
                                               ),
-                                            ),
+                                              if (likePhotoId != null)
+                                                Positioned(
+                                                  top: -6,
+                                                  right: -6,
+                                                  child: HeartForPhoto(
+                                                    albumId: widget.albumId,
+                                                    photoId: likePhotoId,
+                                                    size: 20,
+                                                    svc: _svc,
+                                                    myUid: _uid,
+                                                  ),
+                                                ),
+                                            ],
                                           );
                                         },
                                       );
