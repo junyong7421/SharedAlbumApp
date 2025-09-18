@@ -68,7 +68,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   final GlobalKey _captureKey = GlobalKey();
 
-  // [추가] presence/preview 하트비트(HEAD에서 가져옴)
+  // presence/preview 하트비트
   bool _isSaving = false;
   bool _isImageReady = false;
   bool _isFaceEditMode = false;
@@ -78,7 +78,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   Timer? _previewDebounce;
   String? _presenceKey;
 
-  // [추가] develop 쪽 상태
+  // develop 쪽 상태
   bool _taskLoadedOk = false; // 모델 task 로드 여부
   Uint8List? _editedBytes;    // 결과 PNG(미리보기)
   Uint8List? _originalBytes;  // 원본 바이트
@@ -90,7 +90,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   bool _dimOthers = false;
 
   BeautyParams _beautyParams = BeautyParams();
-  Uint8List? _beautyBasePng;      // 얼굴보정 기준 PNG(pixelRatio=1)
+  Uint8List? _beautyBasePng;       // 얼굴보정 기준 PNG(pixelRatio=1)
   Uint8List? _brightnessBaseBytes; // 밝기 적용 기준 바이트
 
   // RepaintBoundary → PNG 바이트 추출
@@ -162,7 +162,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _isSaving = true;
 
     try {
-      // [변경] 주석만 정리: 화면 캡처 → 업로드 → Firestore 반영
+      // 화면 캡처 → 업로드 → Firestore 반영
       final png = await _exportEditedImageBytes();
       final uploaded = await _uploadEditedPngBytes(png);
 
@@ -215,7 +215,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
   @override
   void initState() {
     super.initState();
-    _presenceKey = widget.photoId ?? widget.editedId ?? widget.originalPhotoId;
+
+    // [변경] presenceKey 우선순위 통일: original → photo → edited
+    _presenceKey = widget.originalPhotoId ?? widget.photoId ?? widget.editedId; // [변경]
 
     // presence 진입 + 하트비트 시작
     _enterPresenceIfPossible();
@@ -408,6 +410,28 @@ class _EditViewScreenState extends State<EditViewScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 16.0),
                     child: Row(
                       children: [
+                        // [추가] 현재 사진의 presence 기준 "편집 중 N" 배지(본인 제외)
+                        if (widget.albumId != null && _presenceKey != null)
+                          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                            stream: _svc.editingMembersStream(
+                              albumId: widget.albumId!,
+                              photoId: _presenceKey!,
+                            ),
+                            builder: (context, snap) {
+                              final others = (snap.data?.docs ?? const [])
+                                  .where((d) =>
+                                      (d.data()['uid'] as String? ?? '') !=
+                                      _uid)
+                                  .length;
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 8.0),
+                                child: _gradientPillButton(
+                                  label: '편집 중 $others', // [추가]
+                                  onTap: () {},
+                                ),
+                              );
+                            },
+                          ),
                         const Spacer(),
                         _gradientPillButton(label: '저장', onTap: _onSave),
                       ],
@@ -471,7 +495,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     );
   }
 
-  // [변경] LayoutBuilder(자르기/얼굴 오버레이) + 다른 사용자 프리뷰(HEAD)를 통합
+  // LayoutBuilder(자르기/얼굴 오버레이) + 다른 사용자 프리뷰
   Widget _buildEditableStage() {
     return LayoutBuilder(
       builder: (_, c) {
@@ -489,7 +513,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
               if (widget.imagePath != null)
                 _buildSinglePreview(widget.imagePath!),
 
-              // [추가] 자르기 오버레이
+              // 자르기 오버레이
               if (_selectedTool == 0)
                 Positioned.fill(
                   child: CropOverlay(
@@ -499,7 +523,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   ),
                 ),
 
-              // [추가] 얼굴 랜드마크/치크라인 오버레이
+              // 얼굴 랜드마크/치크라인 오버레이
               if (_isFaceEditMode && _faces468.isNotEmpty)
                 IgnorePointer(
                   ignoring: true,
@@ -515,12 +539,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   ),
                 ),
 
-              // [추가] 다른 사용자의 프리뷰(투명 오버레이)
+              // 다른 사용자의 프리뷰(투명 오버레이)
               if (widget.albumId != null && _presenceKey != null)
                 StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: _svc.editingMembersStream(
                     albumId: widget.albumId!,
-                    photoId: _presenceKey!,
+                    photoId: _presenceKey!, // [변경] 통일된 키 사용
                   ),
                   builder: (context, snap) {
                     if (!snap.hasData) return const SizedBox.shrink();
@@ -593,7 +617,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted && !_isImageReady) {
                 setState(() => _isImageReady = true);
-                _schedulePreviewUpdate(); // [추가] 최초 로드 시 프리뷰 업로드
+                _schedulePreviewUpdate();
               }
             });
             return child;
@@ -619,7 +643,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && !_isImageReady) {
             setState(() => _isImageReady = true);
-            _schedulePreviewUpdate(); // [추가]
+            _schedulePreviewUpdate();
           }
         });
       }
@@ -632,7 +656,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     }
   }
 
-  // [변경] 메인 툴바: 얼굴보정 진입 시 모델 로드/검출 트리거, 밝기 베이스 고정
+  // 메인 툴바
   Widget _buildMainToolbar() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -653,7 +677,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   if (i == 2) {
                     _brightness = 0.0;
                     _brightnessBaseBytes =
-                        await _currentBytes(); // [추가] 밝기 기준 고정
+                        await _currentBytes(); // 밝기 기준 고정
                   }
                   setState(() {
                     _isFaceEditMode = false;
@@ -718,8 +742,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           _pill('초기화', () async {
-            await _resetToOriginal(); // [추가]
-            _schedulePreviewUpdate(); // [추가]
+            await _resetToOriginal();
+            _schedulePreviewUpdate();
           }),
           _pill('맞춤', () {
             if (_lastStageSize == null) return;
@@ -735,7 +759,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
           }),
           _pill('적용', () async {
             await _applyCrop();
-            _schedulePreviewUpdate(); // [추가]
+            _schedulePreviewUpdate();
           }),
         ],
       );
@@ -766,7 +790,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                           onChanged: (v) => setState(() => _brightness = v),
                           onChangeEnd: (_) async {
                             await _applyBrightness();
-                            _schedulePreviewUpdate(); // [추가]
+                            _schedulePreviewUpdate();
                           },
                         ),
                       ),
@@ -799,19 +823,19 @@ class _EditViewScreenState extends State<EditViewScreen> {
         children: [
           _pill('왼쪽 90°', () async {
             await _applyRotate(-90);
-            _schedulePreviewUpdate(); // [추가]
+            _schedulePreviewUpdate();
           }),
           _pill('오른쪽 90°', () async {
             await _applyRotate(90);
-            _schedulePreviewUpdate(); // [추가]
+            _schedulePreviewUpdate();
           }),
           _pill('좌우 반전', () async {
             await _applyFlipH();
-            _schedulePreviewUpdate(); // [추가]
+            _schedulePreviewUpdate();
           }),
           _pill('상하 반전', () async {
             await _applyFlipV();
-            _schedulePreviewUpdate(); // [추가]
+            _schedulePreviewUpdate();
           }),
         ],
       );
@@ -978,7 +1002,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
         _editedBytes = result.image;
         _beautyParams = result.params;
       });
-      _schedulePreviewUpdate(); // [추가]
+      _schedulePreviewUpdate();
     }
   }
 
