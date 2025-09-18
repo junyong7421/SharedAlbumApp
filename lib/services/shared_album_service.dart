@@ -159,11 +159,13 @@ class SharedAlbumService {
       final url = await task.ref.getDownloadURL();
 
       await photosRef.add({
-        'url': url,
-        'storagePath': storagePath,
-        'uploaderUid': uid,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+  'url': url,
+  'storagePath': storagePath,
+  'uploaderUid': uid,
+  'createdAt': FieldValue.serverTimestamp(),
+  'likedBy': <String>[], // 👍 초기값 추가
+});
+
 
       added++;
       lastUrl = url;
@@ -246,8 +248,28 @@ class SharedAlbumService {
         .orderBy('createdAt', descending: true);
 
     return col.snapshots().map(
-      (qs) => qs.docs.map((d) => Photo.fromDoc(d.id, d.data())).toList(),
-    );
+  (qs) => qs.docs.map((d) => Photo.fromMap(d.id, d.data())).toList(),
+);
+
+  }
+
+  Future<void> toggleLike({
+    required String uid,
+    required String albumId,
+    required String photoId,
+    required bool like, // true면 추가, false면 제거
+  }) async {
+    final ref = _fs
+        .collection('albums')
+        .doc(albumId)
+        .collection('photos')
+        .doc(photoId);
+
+    await ref.update({
+      'likedBy': like
+          ? FieldValue.arrayUnion([uid])
+          : FieldValue.arrayRemove([uid]),
+    });
   }
 
   // ===== 내부: edited 잠금/해제 =====
@@ -662,28 +684,30 @@ class Album {
 class Photo {
   final String id;
   final String url;
-  final String? storagePath;
-  final String? uploaderUid;
-  final Timestamp? createdAt;
+  final List<String> likedBy; // 👍 누른 uid 목록
 
   Photo({
     required this.id,
     required this.url,
-    required this.storagePath,
-    required this.uploaderUid,
-    required this.createdAt,
+    this.likedBy = const [],
   });
 
-  factory Photo.fromDoc(String id, Map<String, dynamic> d) {
+  factory Photo.fromMap(String id, Map<String, dynamic> m) {
     return Photo(
       id: id,
-      url: (d['url'] ?? '') as String,
-      storagePath: d['storagePath'] as String?,
-      uploaderUid: d['uploaderUid'] as String?,
-      createdAt: d['createdAt'] as Timestamp?,
+      url: (m['url'] as String?) ?? '',
+      likedBy: (m['likedBy'] as List?)?.map((e) => e.toString()).toList() ?? const [],
     );
   }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'url': url,
+      'likedBy': likedBy,
+    };
+  }
 }
+
 
 class EditingInfo {
   final String albumId;
