@@ -49,17 +49,28 @@ class EditViewScreen extends StatefulWidget {
 
 class _EditViewScreenState extends State<EditViewScreen> {
   // ▼ 4개 툴 전환: 0=자르기, 1=얼굴보정, 2=밝기, 3=회전/반전
-  int _selectedTool = 1; // 0=자르기,1=얼굴보정,2=밝기,3=회전/반전
+  int _selectedTool = -1; // 0=자르기,1=얼굴보정,2=밝기,3=회전/반전
   Rect? _cropRectStage;
   Size? _lastStageSize;
   double _brightness = 0.0;
   bool _brightnessApplying = false;
+
+  // 얼굴별 보정 파라미터 저장소
+  final Map<int, BeautyParams> _faceParams = {};
+
+  // 얼굴보정 전용 Undo 스택 (적용할 때마다 push)
+  final List<({Uint8List image, Map<int, BeautyParams> params})> _faceUndo = [];
+
+  // 얼굴보정 오버레이 캡처 제외용
+  bool _faceOverlayOn = true;
 
   final List<IconData> _toolbarIcons = const [
     Icons.crop,
     Icons.face_retouching_natural,
     Icons.brightness_6,
     Icons.rotate_90_degrees_ccw,
+    Icons.color_lens, // 4 채도
+    Icons.hdr_strong, // 5 선명도(샤픈)
   ];
 
   final int _selectedIndex = 2;
@@ -91,13 +102,41 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   BeautyParams _beautyParams = BeautyParams();
   Uint8List? _beautyBasePng; // 보정/저장용 결과
-  Uint8List? _brightnessBaseBytes;
+
+  // 얼굴 파라미터(deep copy)
+  Map<int, BeautyParams> _cloneParams(Map<int, BeautyParams> src) {
+    final out = <int, BeautyParams>{};
+    src.forEach((k, v) {
+      out[k] = v.copyWith(); // 새로운 BeautyParams 생성
+    });
+    return out;
+  }
+
+  double _saturation = 0.0;
+  bool _saturationApplying = false;
+
+  double _sharp = 0.0; // 0.0 ~ 1.0 (0이 원본)
+  bool _sharpenApplying = false;
+
+  // 조정 패널 들어올 때 스냅샷(베이스)
+  Uint8List? _adjustBaseBytes;
 
   // 저장 핵심 로직
 
   // RepaintBoundary → PNG 바이트 추출
   // 기존 함수 교체
-  Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
+  Future<Uint8List> _exportEditedImageBytes({
+    double pixelRatio = 2.5,
+    bool hideOverlay = false, // ▶ 추가: 캡처 직전에 오버레이 숨길지
+  }) async {
+    // 오버레이 임시 숨김 (필요할 때만)
+    final prevOverlay = _faceOverlayOn;
+    if (hideOverlay && prevOverlay) {
+      setState(() => _faceOverlayOn = false);
+      // 한 프레임 쉬고 캡처 (오버레이가 화면에서 실제로 사라지도록)
+      await Future.delayed(const Duration(milliseconds: 16));
+    }
+
     final boundary =
         _captureKey.currentContext?.findRenderObject()
             as RenderRepaintBoundary?;
@@ -109,6 +148,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
     if (byteData == null) {
       throw StateError('PNG 인코딩에 실패했습니다.');
     }
+
+    // 숨겼다면 원상복구
+    if (hideOverlay && prevOverlay && mounted) {
+      setState(() => _faceOverlayOn = true);
+    }
+
     return byteData.buffer.asUint8List();
   }
 
@@ -158,8 +203,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
     try {
       // 1) 현재 편집 화면 캡처
-      final png = await _exportEditedImageBytes(); // 기본 pixelRatio=2.5 유지
-
+      final png = await _exportEditedImageBytes(hideOverlay: true);
       // 2) edited/* 경로로 업로드
       final uploaded = await _uploadEditedPngBytes(png);
 
@@ -431,10 +475,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   ),
                 ),
 
-              if (_isFaceEditMode && _faces468.isNotEmpty)
+              if (_isFaceEditMode && _faces468.isNotEmpty && _faceOverlayOn)
                 IgnorePointer(
                   ignoring: true,
-                  // _buildEditableStage() 안의 CustomPaint 부분만 교체
                   child: CustomPaint(
                     painter: _LmOverlayPainter(
                       faces: _faces468,
@@ -550,11 +593,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
                     _runFaceDetect();
                   }
                 } else {
-                  // ▼ 밝기 탭 진입: 기준 이미지와 슬라이더 0으로 초기화
-                  if (i == 2) {
-                    _brightness = 0.0;
-                    _brightnessBaseBytes =
-                        await _currentBytes(); // 현재 화면의 이미지(원본 또는 기존편집본)를 베이스로 고정
+                  // 얼굴보정 이탈 → 스택 비우기 (얼굴 보정 undo만 관리)
+                  _faceUndo.clear();
+
+                  // 조정툴 진입 시 베이스 스냅샷
+                  if (i == 2 || i == 4 || i == 5) {
+                    _adjustBaseBytes = await _currentBytes();
+                    if (i == 2) _brightness = 0.0;
+                    if (i == 4) _saturation = 0.0;
+                    if (i == 5) _sharp = 0.0;
                   }
                   setState(() {
                     _isFaceEditMode = false;
@@ -578,12 +625,16 @@ class _EditViewScreenState extends State<EditViewScreen> {
           }),
         ),
         const SizedBox(height: 8),
+
+        /// ⬇️ 이 부분이 빠져서 패널이 안 보였던 거예요!
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
           child: switch (_selectedTool) {
             0 => _cropPanel(),
             2 => _brightnessPanel(),
             3 => _rotatePanel(),
+            4 => _saturationPanel(),
+            5 => _sharpenPanel(),
             _ => const SizedBox.shrink(),
           },
         ),
@@ -595,9 +646,13 @@ class _EditViewScreenState extends State<EditViewScreen> {
     key: const ValueKey('crop'),
     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
     children: [
-      _pill('초기화', () async {
-        await _resetToOriginal(); // ← 여기!
-      }),
+      _pill(
+        '초기화',
+        () => setState(() {
+          _cropRectStage = null;
+          _editedBytes = null; // ← 원본으로 복귀
+        }),
+      ),
       _pill('맞춤', () {
         if (_lastStageSize == null) return;
         final s = _lastStageSize!;
@@ -613,6 +668,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _pill('적용', _applyCrop),
     ],
   );
+
   Widget _brightnessPanel() => Column(
     key: const ValueKey('brightness'),
     children: [
@@ -670,6 +726,123 @@ class _EditViewScreenState extends State<EditViewScreen> {
     ],
   );
 
+  Widget _saturationPanel() => Column(
+    key: const ValueKey('saturation'),
+    children: [
+      Row(
+        children: [
+          const SizedBox(width: 8),
+          const Icon(Icons.colorize, size: 18),
+          Expanded(
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // 0 위치 표시 막대
+                const _ZeroTick(),
+                Slider(
+                  value: _saturation,
+                  min: -1.0,
+                  max: 1.0,
+                  divisions: 40,
+                  label: _saturation.toStringAsFixed(2),
+                  onChanged: (v) => setState(() => _saturation = v),
+                  onChangeEnd: (_) => _applySaturation(),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.palette, size: 18),
+          const SizedBox(width: 8),
+        ],
+      ),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _pill('초기화', () {
+            setState(() => _saturation = 0.0);
+            _applySaturation();
+          }),
+        ],
+      ),
+      if (_saturationApplying)
+        const SizedBox(height: 2, child: LinearProgressIndicator()),
+    ],
+  );
+
+  Widget _sharpenPanel() => Column(
+    key: const ValueKey('sharpen'),
+    children: [
+      Row(
+        children: [
+          const SizedBox(width: 8),
+          const Icon(Icons.blur_on, size: 18),
+          Expanded(
+            child: Slider(
+              value: _sharp,
+              min: 0.0,
+              max: 1.0,
+              divisions: 20,
+              label: _sharp.toStringAsFixed(2),
+              onChanged: (v) => setState(() => _sharp = v),
+              onChangeEnd: (_) => _applySharpen(),
+            ),
+          ),
+          const Icon(Icons.hdr_strong, size: 18),
+          const SizedBox(width: 8),
+        ],
+      ),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _pill('초기화', () {
+            setState(() => _sharp = 0.0); // ← 샤픈 값을 리셋
+            _applySharpen(); // ← 샤픈 적용 함수 호출
+          }),
+        ],
+      ),
+      if (_sharpenApplying)
+        const SizedBox(height: 2, child: LinearProgressIndicator()),
+    ],
+  );
+
+  Future<void> _applySaturation() async {
+    _faceUndo.clear();
+    if (_saturationApplying) return;
+    _saturationApplying = true;
+    setState(() {});
+    try {
+      final base = _adjustBaseBytes ?? await _currentBytes();
+      if (_saturation.abs() < 1e-6) {
+        setState(() => _editedBytes = base);
+      } else {
+        final out = ImageOps.adjustSaturation(base, _saturation);
+        setState(() => _editedBytes = out);
+      }
+    } finally {
+      _saturationApplying = false;
+      setState(() {});
+    }
+  }
+
+  Future<void> _applySharpen() async {
+    _faceUndo.clear();
+    if (_sharpenApplying) return;
+    _sharpenApplying = true;
+    setState(() {});
+    try {
+      final base = _adjustBaseBytes ?? await _currentBytes();
+      if (_sharp.abs() < 1e-6) {
+        setState(() => _editedBytes = base);
+      } else {
+        final out = ImageOps.sharpen(base, _sharp);
+        setState(() => _editedBytes = out);
+      }
+    } finally {
+      _sharpenApplying = false;
+      setState(() {});
+    }
+  }
+
   Widget _rotatePanel() => Row(
     key: const ValueKey('rotate'),
     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -688,6 +861,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _applyCrop() async {
+    _faceUndo.clear();
     if (_cropRectStage == null || _lastStageSize == null) return;
     final bytes = await _currentBytes();
     final out = ImageOps.cropFromStageRect(
@@ -702,17 +876,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _applyBrightness() async {
+    _faceUndo.clear();
     if (_brightnessApplying) return;
     _brightnessApplying = true;
     setState(() {});
 
     try {
-      // ▼ 베이스 확보: 없으면 현재 이미지로
-      final base = _brightnessBaseBytes ?? await _currentBytes();
-
-      // ▼ 0이면 베이스 그대로 사용
+      final base = _adjustBaseBytes ?? await _currentBytes(); // 공용 베이스
       if (_brightness.abs() < 1e-6) {
-        setState(() => _editedBytes = base);
+        setState(() => _editedBytes = base); // 0이면 베이스 그대로
       } else {
         final out = ImageOps.adjustBrightness(base, _brightness);
         setState(() => _editedBytes = out);
@@ -724,27 +896,33 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _resetToOriginal() async {
+    _faceUndo.clear();
     await _loadOriginalBytes(); // _originalBytes 보장
     setState(() {
       _editedBytes = null; // 프리뷰가 원본을 그리도록
       _cropRectStage = null; // 오버레이도 초기화
       _brightness = 0.0; // 슬라이더 센터
-      _brightnessBaseBytes = null; // 다음에 밝기 탭 들어가면 다시 베이스 잡게
       _beautyBasePng = null; // (얼굴보정도 필요시 다시 베이스 만들도록)
+      _saturation = 0.0;
+      _sharp = 0.0;
+      _adjustBaseBytes = null; // 다음 조정 진입 시 새 베이스 캡처
     });
   }
 
   Future<void> _applyRotate(int deg) async {
+    _faceUndo.clear();
     final bytes = await _currentBytes();
     setState(() => _editedBytes = ImageOps.rotate(bytes, deg));
   }
 
   Future<void> _applyFlipH() async {
+    _faceUndo.clear();
     final bytes = await _currentBytes();
     setState(() => _editedBytes = ImageOps.flipHorizontal(bytes));
   }
 
   Future<void> _applyFlipV() async {
+    _faceUndo.clear();
     final bytes = await _currentBytes();
     setState(() => _editedBytes = ImageOps.flipVertical(bytes));
   }
@@ -764,22 +942,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // 얼굴보정 전용 툴바 (아이콘들은 임시 플레이스홀더)
   // 교체: _buildFaceEditToolbar()
   Widget _buildFaceEditToolbar() {
+    final canUndo = _faceUndo.isNotEmpty;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _faceTool(
-          icon: Icons.close,
-          onTap: () {
-            setState(() {
-              _isFaceEditMode = false;
-              _faces468.clear();
-              _faceRects.clear();
-              _selectedFace = null;
-            });
-          },
-        ),
+        // ⬅️ 닫기: 기본 툴바로 복귀
+        _faceTool(icon: Icons.close, onTap: _exitFaceMode),
 
-        // 가장 큰 얼굴 자동 선택(편의)
+        // 가장 큰 얼굴 자동 선택
         _faceTool(
           icon: Icons.center_focus_strong,
           onTap: () {
@@ -788,7 +959,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
             double best = -1;
             for (int i = 0; i < _faceRects.length; i++) {
               final r = _faceRects[i];
-              final area = (r.width * r.height);
+              final area = r.width * r.height;
               if (area > best) {
                 best = area;
                 largest = i;
@@ -798,23 +969,35 @@ class _EditViewScreenState extends State<EditViewScreen> {
           },
         ),
 
-        // 랜드마크 점 보이기/숨기기
+        // 랜드마크 토글
         _faceTool(
           icon: _showLm ? Icons.visibility : Icons.visibility_off,
           onTap: () => setState(() => _showLm = !_showLm),
         ),
 
-        /*선택된 얼굴 외 암처리 On/Off
-        _faceTool(
-          icon: _dimOthers ? Icons.brightness_5 : Icons.brightness_5_outlined,
-          onTap: () => setState(() => _dimOthers = !_dimOthers),
+        // 이전(Undo)
+        _faceToolEx(
+          icon: Icons.undo,
+          enabled: canUndo,
+          onTap: canUndo ? _undoFaceOnce : null,
         ),
-        */
 
-        // (자리만 잡아둠) 실제 보정 패널 오픈
+        // 보정 패널 열기
         _faceTool(icon: Icons.brush, onTap: _openBeautyPanel),
       ],
     );
+  }
+
+  Future<void> _undoFaceOnce() async {
+    if (_faceUndo.isEmpty) return;
+    final snap = _faceUndo.removeLast();
+    setState(() {
+      _editedBytes = snap.image;
+      // ✅ 재할당 대신, 내용만 교체
+      _faceParams
+        ..clear()
+        ..addAll(_cloneParams(snap.params)); // 아래 2) 참고
+    });
   }
 
   // 작은 공통 위젯
@@ -837,11 +1020,16 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return;
     }
 
-    // 기준 PNG는 한 번만 만들기 (pixelRatio=1.0)
-    _beautyBasePng ??= await _exportEditedImageBytes(pixelRatio: 1.0);
-    final Size stageSize = _captureKey.currentContext!.size!;
+    // ① 오버레이 숨기고 캡처(겹그림 방지)
+    setState(() => _faceOverlayOn = false);
+    await Future.delayed(const Duration(milliseconds: 16));
+    _beautyBasePng = await _exportEditedImageBytes(pixelRatio: 1.0);
+    setState(() => _faceOverlayOn = true);
 
-    // 결과: (image, params) 레코드로 받기
+    final Size stageSize = _captureKey.currentContext!.size!;
+    final init = _faceParams[_selectedFace!] ?? BeautyParams();
+
+    // ② 패널 띄우기
     final result =
         await showModalBottomSheet<({Uint8List image, BeautyParams params})>(
           context: context,
@@ -851,21 +1039,63 @@ class _EditViewScreenState extends State<EditViewScreen> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
           ),
           builder: (_) => BeautyPanel(
-            srcPng: _beautyBasePng!, // 항상 기준에서 시작 → 누적 방지
+            srcPng: _beautyBasePng!, // 스테이지 크기 기준 PNG
             faces468: _faces468,
             selectedFace: _selectedFace!,
-            imageSize: stageSize, // pixelRatio=1.0과 동일 크기
-            initialParams: _beautyParams, // 슬라이더 초기값 유지
+            imageSize: stageSize,
+            initialParams: init, // 얼굴별로 저장된 값 있으면 적용
           ),
         );
 
+    // ③ 적용 결과 수신 → Undo 스택에 "이전 상태" 저장하고 반영
     if (result != null && mounted) {
+      final prev = await _currentBytes();
+      final paramsCopy = _cloneParams(_faceParams);
+
       setState(() {
-        _editedBytes = result.image; // 화면 갱신
-        _beautyParams = result.params; // 다음에 열 때 그대로
-        // _beautyBasePng는 바꾸지 않음 → 누적 방지
+        _faceUndo.add((
+          image: Uint8List.fromList(prev),
+          params: paramsCopy,
+        )); // 한 번만!
+        _editedBytes = result.image;
+        _faceParams[_selectedFace!] = result.params;
       });
     }
+  }
+
+  void _exitFaceMode() {
+    // 기본 툴바로 복귀
+    setState(() {
+      _isFaceEditMode = false; // ← 이 한 줄이 핵심
+      _selectedTool = 1; // 메인툴바에서 '얼굴' 아이콘 선택 상태 유지(원하면 다른 인덱스로)
+      _selectedFace = null; // 선택 해제(선택)
+      _showLm = false; // 랜드마크 표시 끔(선택)
+    });
+
+    // 얼굴보정 전용 undo 스택은 정리(선택)
+    _faceUndo.clear();
+    // _beautyBasePng = null; // 필요하면 캡처 베이스도 초기화
+  }
+
+  // 사용감 좋은 변형
+  Widget _faceToolEx({
+    required IconData icon,
+    required VoidCallback? onTap,
+    bool enabled = true,
+  }) {
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.35,
+      child: IgnorePointer(
+        ignoring: !enabled,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4),
+            child: Icon(icon, size: 22, color: Colors.black87),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadOriginalBytes() async {
@@ -1021,6 +1251,20 @@ class _LmOverlayPainter extends CustomPainter {
       old.paintSize != paintSize ||
       old.showLm != showLm ||
       old.dimOthers != dimOthers;
+}
+
+class _ZeroTick extends StatelessWidget {
+  const _ZeroTick({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: true,
+      child: Align(
+        alignment: Alignment.center,
+        child: Container(width: 2, height: 16, color: Colors.black12),
+      ),
+    );
+  }
 }
 
 enum _ActiveHandle { none, move, tl, tr, bl, br, top, right, bottom, left }

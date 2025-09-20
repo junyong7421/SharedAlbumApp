@@ -5,13 +5,13 @@ import 'face_regions.dart';
 import 'filters.dart';
 
 class BeautyParams {
-  double skinStrength;   // 0~1
-  double eyeAmount;      // 0~1
-  double lipSatGain;     // 0~1
-  double lipIntensity;   // 0~1
-  double hueShift;       // deg
-  double noseAmount;     // -1~+1 (음수=축소, 양수=확대)
-  double faceAmount;     // -1~+1
+  double skinStrength; // 0~1
+  double eyeAmount; // 0~1
+  double lipSatGain; // 0~1
+  double lipIntensity; // 0~1
+  double hueShift; // deg
+  double noseAmount; // -1~+1 (음수=축소, 양수=확대)
+  double faceAmount; // -1~+1
 
   BeautyParams({
     this.skinStrength = 0.35,
@@ -31,16 +31,15 @@ class BeautyParams {
     double? hueShift,
     double? noseAmount,
     double? faceAmount,
-  }) =>
-      BeautyParams(
-        skinStrength: skinStrength ?? this.skinStrength,
-        eyeAmount: eyeAmount ?? this.eyeAmount,
-        lipSatGain: lipSatGain ?? this.lipSatGain,
-        lipIntensity: lipIntensity ?? this.lipIntensity,
-        hueShift: hueShift ?? this.hueShift,
-        noseAmount: noseAmount ?? this.noseAmount,
-        faceAmount: faceAmount ?? this.faceAmount,
-      );
+  }) => BeautyParams(
+    skinStrength: skinStrength ?? this.skinStrength,
+    eyeAmount: eyeAmount ?? this.eyeAmount,
+    lipSatGain: lipSatGain ?? this.lipSatGain,
+    lipIntensity: lipIntensity ?? this.lipIntensity,
+    hueShift: hueShift ?? this.hueShift,
+    noseAmount: noseAmount ?? this.noseAmount,
+    faceAmount: faceAmount ?? this.faceAmount,
+  );
 }
 
 class BeautyController {
@@ -63,7 +62,13 @@ class _Job {
   final Size imageSize;
   final BeautyParams params;
 
-  _Job(this.srcPng, this.faces468, this.selectedFace, this.imageSize, this.params);
+  _Job(
+    this.srcPng,
+    this.faces468,
+    this.selectedFace,
+    this.imageSize,
+    this.params,
+  );
 }
 
 Future<Uint8List> _apply(_Job j) async {
@@ -92,9 +97,13 @@ Future<Uint8List> _apply(_Job j) async {
         const Radius.circular(20),
       ),
     );
-  final lipPathInv = Path.combine(PathOperation.difference, faceRectPath, lipPath);
+  final lipPathInv = Path.combine(
+    PathOperation.difference,
+    faceRectPath,
+    lipPath,
+  );
 
-  final lipMask  = await rasterizeMask(j.imageSize, lipPath,   feather: 2);
+  final lipMask = await rasterizeMask(j.imageSize, lipPath, feather: 2);
   final skinMask = await rasterizeMask(j.imageSize, lipPathInv, feather: 4);
 
   // 3) 편의 포인트들
@@ -160,16 +169,15 @@ Future<Uint8List> _apply(_Job j) async {
   }
 
   // 얼굴 전체 크기 (틀 포함)
+  // ✅ 얼굴 전체 크기(자연스러운 와핑)
   if (j.params.faceAmount.abs() > 0.001) {
-    cur = await resizeFaceBox(
+    cur = await resizeRegionRadial(
       bytes: cur,
+      center: faceCenter,
+      radius: faceRadius,
+      amount: j.params.faceAmount.clamp(-1.0, 1.0),
       width: width,
       height: height,
-      minX: minX,
-      minY: minY,
-      maxX: maxX,
-      maxY: maxY,
-      amount: j.params.faceAmount.clamp(-1.0, 1.0),
     );
   }
 
