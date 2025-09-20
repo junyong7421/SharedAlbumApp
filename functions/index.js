@@ -1,32 +1,64 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * const {onCall} = require("firebase-functions/v2/https");
- * const {onDocumentWritten} = require("firebase-functions/v2/firestore");
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
+// functions/index.js
+const { onCall } = require('firebase-functions/v2/https');
+const { setGlobalOptions } = require('firebase-functions/v2');
+const logger = require('firebase-functions/logger');
+const admin = require('firebase-admin');
+const { AccessToken } = require('livekit-server-sdk');
 
-const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/https");
-const logger = require("firebase-functions/logger");
+admin.initializeApp();
 
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
-setGlobalOptions({ maxInstances: 10 });
+// 리전/인스턴스 옵션
+setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
 
-// Create and deploy your first functions
-// https://firebase.google.com/docs/functions/get-started
+// LiveKit 토큰 발급 (Callable)
+exports.createLivekitToken = onCall(
+  {
+    region: 'us-central1',
+    enforceAppCheck: true, // App Check 없으면 401
+  },
+  async (req) => {
+    const uid = req.auth?.uid || null;
+    const roomName = req.data?.room;
+    const name = req.data?.name || '';
 
-// exports.helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+    logger.info('[createLivekitToken] start', { uid, roomName, name });
+    if (!uid) throw new Error('unauthenticated');
+    if (!roomName) throw new Error('invalid-argument: room required');
+
+    // ✅ .env에서 읽어옴 (defineSecret / functions.config() 사용 안 함)
+    const url = process.env.LK_URL;
+    const apiKey = process.env.LK_KEY;
+    const apiSecret = process.env.LK_API_SECRET;
+
+    if (!url || !apiKey || !apiSecret) {
+      logger.error('[createLivekitToken] missing env', {
+        hasUrl: !!url, hasKey: !!apiKey, hasSecret: !!apiSecret,
+      });
+      throw new Error('failed-precondition: LiveKit config missing');
+    }
+
+    try {
+      const at = new AccessToken(apiKey, apiSecret, {
+        identity: uid,
+        name: name || uid,
+      });
+      at.addGrant({
+        roomJoin: true,
+        room: roomName,
+        canPublish: true,
+        canSubscribe: true,
+        canPublishData: true,
+      });
+
+      const token = await at.toJwt();
+      logger.info('[createLivekitToken] success', {
+        urlHost: url.split('://')[1],
+        tokenLen: token.length,
+      });
+      return { url, token };
+    } catch (e) {
+      logger.error('[createLivekitToken] error', e);
+      throw new Error('internal: token failed');
+    }
+  }
+);
