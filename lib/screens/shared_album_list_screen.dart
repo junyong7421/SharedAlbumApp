@@ -198,28 +198,42 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       // A) 이미 접속 중인가? → 오버레이 보장 + 접속자 팝업
       final activeAlbumId = await _svc.getMyActiveVoiceAlbumId();
       if (activeAlbumId != null) {
-        // 앨범 이름
+        // 앨범 이름 조회
         final myAlbums = await _svc.watchMySharedAlbums().first;
-        String albumName = '보이스톡';
-        for (final a in myAlbums) {
-          if (a.id == activeAlbumId) {
-            albumName = a.name;
-            break;
-          }
-        }
+        final albumName = myAlbums
+            .firstWhere(
+              (a) => a.id == activeAlbumId,
+              orElse: () => SharedAlbumListItem(
+                id: activeAlbumId,
+                name: '보이스톡',
+                ownerUid: '',
+                memberUids: const [],
+                photoCount: 0,
+                createdAt: null,
+                updatedAt: null,
+              ),
+            )
+            .name;
 
-        // 오버레이가 없으면 띄움
+        // ★ 실제 연결 여부와 무관하게 1회 join 보장 (이미 붙어 있으면 내부에서 스킵)
+        await _svc.joinVoice(albumId: activeAlbumId);
+
+        // 오버레이 표시
         voiceOverlay.show(albumId: activeAlbumId, albumName: albumName);
 
-        // 접속자 팝업
-        final stream = _svc.watchVoiceParticipants(activeAlbumId).map(
-          (list) => list
-              .map((m) => MemberLite(
-                    uid: m.uid,
-                    name: m.name.isNotEmpty ? m.name : m.email,
-                  ))
-              .toList(),
-        );
+        // 참가자 팝업
+        final stream = _svc
+            .watchVoiceParticipants(activeAlbumId)
+            .map(
+              (list) => list
+                  .map(
+                    (m) => MemberLite(
+                      uid: m.uid,
+                      name: m.name.isNotEmpty ? m.name : m.email,
+                    ),
+                  )
+                  .toList(),
+            );
         final initial = await stream.first;
 
         await showVoiceNowPopup(
@@ -237,8 +251,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
 
       // B) 접속 중이 아니면: 앨범 선택 → 입장 → 오버레이 → 접속자 팝업
       final albums = await _svc.watchMySharedAlbums().first;
-      final albumLites =
-          albums.map((a) => AlbumLite(id: a.id, name: a.name)).toList();
+      final albumLites = albums
+          .map((a) => AlbumLite(id: a.id, name: a.name))
+          .toList();
 
       final selectedAlbumId = await showAlbumSelectPopup(
         context,
@@ -246,8 +261,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       );
       if (selectedAlbumId == null) return;
 
-      final selectedAlbum =
-          albumLites.firstWhere((e) => e.id == selectedAlbumId);
+      final selectedAlbum = albumLites.firstWhere(
+        (e) => e.id == selectedAlbumId,
+      );
 
       await _svc.joinVoice(albumId: selectedAlbumId);
 
@@ -257,14 +273,18 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
         albumName: selectedAlbum.name,
       );
 
-      final stream = _svc.watchVoiceParticipants(selectedAlbumId).map(
-        (list) => list
-            .map((m) => MemberLite(
-                  uid: m.uid,
-                  name: m.name.isNotEmpty ? m.name : m.email,
-                ))
-            .toList(),
-      );
+      final stream = _svc
+          .watchVoiceParticipants(selectedAlbumId)
+          .map(
+            (list) => list
+                .map(
+                  (m) => MemberLite(
+                    uid: m.uid,
+                    name: m.name.isNotEmpty ? m.name : m.email,
+                  ),
+                )
+                .toList(),
+          );
       final initial = await stream.first;
 
       await showVoiceNowPopup(
@@ -279,9 +299,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('보이스톡 진입 실패: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('보이스톡 진입 실패: $e')));
     }
   }
 
@@ -291,8 +311,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
     final photo = user?.photoURL;
     return CircleAvatar(
       radius: 24,
-      backgroundImage:
-          (photo != null && photo.isNotEmpty) ? NetworkImage(photo) : null,
+      backgroundImage: (photo != null && photo.isNotEmpty)
+          ? NetworkImage(photo)
+          : null,
       backgroundColor: const Color(0xFFD9E2FF),
       child: (photo == null || photo.isEmpty)
           ? const Icon(Icons.person, color: Color(0xFF625F8C))
@@ -363,15 +384,15 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       if (selected != null && selected.isNotEmpty) {
         await _svc.addMembers(albumId, selected);
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('멤버가 추가되었습니다.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('멤버가 추가되었습니다.')));
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('추가 실패: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('추가 실패: $e')));
     }
   }
 
@@ -412,14 +433,16 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                       final m = members[i];
                       return ListTile(
                         leading: CircleAvatar(
-                          backgroundImage: (m.photoUrl != null &&
-                                  m.photoUrl!.isNotEmpty)
+                          backgroundImage:
+                              (m.photoUrl != null && m.photoUrl!.isNotEmpty)
                               ? NetworkImage(m.photoUrl!)
                               : null,
                           backgroundColor: const Color(0xFFD9E2FF),
                           child: (m.photoUrl == null || m.photoUrl!.isEmpty)
-                              ? const Icon(Icons.person,
-                                  color: Color(0xFF625F8C))
+                              ? const Icon(
+                                  Icons.person,
+                                  color: Color(0xFF625F8C),
+                                )
                               : null,
                         ),
                         title: Text(
@@ -429,8 +452,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
                         subtitle: m.name.isNotEmpty
                             ? Text(
                                 m.email,
-                                style:
-                                    const TextStyle(color: Color(0xFF625F8C)),
+                                style: const TextStyle(
+                                  color: Color(0xFF625F8C),
+                                ),
                               )
                             : null,
                       );
@@ -471,9 +495,9 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('불러오기 실패: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('불러오기 실패: $e')));
     }
   }
 }
@@ -552,8 +576,8 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
                         title: Text(f.name.isNotEmpty ? f.name : f.email),
                         subtitle: f.name.isNotEmpty ? Text(f.email) : null,
                         secondary: CircleAvatar(
-                          backgroundImage: (f.photoUrl != null &&
-                                  f.photoUrl!.isNotEmpty)
+                          backgroundImage:
+                              (f.photoUrl != null && f.photoUrl!.isNotEmpty)
                               ? NetworkImage(f.photoUrl!)
                               : null,
                           child: (f.photoUrl == null || f.photoUrl!.isEmpty)
