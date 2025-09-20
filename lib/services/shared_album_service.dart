@@ -8,19 +8,16 @@ import 'package:image_picker/image_picker.dart';
 /// albums/{albumId}
 ///   - title, ownerUid, memberUids[], photoCount, coverPhotoUrl, createdAt, updatedAt
 ///   photos/{photoId}
-///     - url, storagePath, uploaderUid, createdAt
+///     - url, storagePath, uploaderUid, createdAt, likedBy[]
 ///   edited/{editedId}
-///     - url, storagePath, originalPhotoId?, editorUid, createdAt, updatedAt, isEditing, editingUid, editingStartedAt
+///     - url, storagePath, originalPhotoId?, editorUid, createdAt, updatedAt,
+///       isEditing, editingUid, editingStartedAt
 ///
-///   // 편집 세션(유저별)과 프레즌스(사진별) 컬렉션 분리
+/// 편집 세션 (유저별)
 ///   editing_by_user/{uid}
-///     - uid, photoId?, photoUrl, source('original'|'edited'), editedId?, originalPhotoId?,
-///       status('active'|'paused'), startedAt, updatedAt
-///
-///   editing_presence/{photoId}
-///     - photoId, isEditing, editorsCount, topEditorName, updatedAt
-///     members/{uid}
-///       - uid, name, previewUrl?, updatedAt
+///     - uid, photoId?, photoUrl, source('original'|'edited'),
+///       editedId?, originalPhotoId?, status('active'),
+///       userDisplayName?, startedAt, updatedAt
 ///
 /// Storage 권장 경로:
 ///   albums/{albumId}/original/{file}.jpg|png...
@@ -34,15 +31,21 @@ class SharedAlbumService {
   final _storage = FirebaseStorage.instance;
   final _picker = ImagePicker();
 
-  // =========================
-  // [추가] 프레즌스 유효 시간(초)
-  //   배지("편집 중 N")와 "편집 중인 사진" 리스트가 동일 cutoff 기준으로 동작하도록 고정
-  // =========================
-  static const int presenceAliveSeconds = 25; // [추가]
-
   // 경로 헬퍼
+  CollectionReference<Map<String, dynamic>> _albumsCol() =>
+      _fs.collection('albums');
+
+  DocumentReference<Map<String, dynamic>> _albumDoc(String albumId) =>
+      _albumsCol().doc(albumId);
+
+  CollectionReference<Map<String, dynamic>> _photosCol(String albumId) =>
+      _albumDoc(albumId).collection('photos');
+
+  CollectionReference<Map<String, dynamic>> _editedCol(String albumId) =>
+      _albumDoc(albumId).collection('edited');
+
   CollectionReference<Map<String, dynamic>> _editingByUserCol(String albumId) =>
-      _fs.collection('albums').doc(albumId).collection('editing_by_user');
+      _albumDoc(albumId).collection('editing_by_user');
 
   DocumentReference<Map<String, dynamic>> _editingByUserDoc(
     String albumId,
@@ -50,39 +53,22 @@ class SharedAlbumService {
   ) =>
       _editingByUserCol(albumId).doc(uid);
 
-  DocumentReference<Map<String, dynamic>> _presenceSummaryDoc(
-    String albumId,
-    String photoId,
-  ) =>
-      _fs
-          .collection('albums')
-          .doc(albumId)
-          .collection('editing_presence')
-          .doc(photoId);
-
-  CollectionReference<Map<String, dynamic>> _presenceMembersCol(
-    String albumId,
-    String photoId,
-  ) =>
-      _presenceSummaryDoc(albumId, photoId).collection('members');
-
   // ===== 앨범 =====
 
   Stream<List<Album>> watchAlbums(String uid) {
-    final q = _fs
-        .collection('albums')
+    final q = _albumsCol()
         .where('memberUids', arrayContains: uid)
         .orderBy('updatedAt', descending: true);
     return q.snapshots().map(
-      (qs) => qs.docs.map((d) => Album.fromDoc(d.id, d.data())).toList(),
-    );
+          (qs) => qs.docs.map((d) => Album.fromDoc(d.id, d.data())).toList(),
+        );
   }
 
   Future<String> createAlbum({
     required String uid,
     required String title,
   }) async {
-    final ref = _fs.collection('albums').doc();
+    final ref = _albumsCol().doc();
     await ref.set({
       'title': title,
       'ownerUid': uid,
@@ -100,17 +86,15 @@ class SharedAlbumService {
     required String albumId,
     required String newTitle,
   }) async {
-    await _fs.collection('albums').doc(albumId).update({
-      'title': newTitle,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await _albumDoc(albumId)
+        .update({'title': newTitle, 'updatedAt': FieldValue.serverTimestamp()});
   }
 
   Future<void> deleteAlbum({
     required String uid,
     required String albumId,
   }) async {
-    final albumRef = _fs.collection('albums').doc(albumId);
+    final albumRef = _albumDoc(albumId);
 
     // photos 삭제 + 스토리지 삭제
     final photos = await albumRef.collection('photos').get();
@@ -128,16 +112,6 @@ class SharedAlbumService {
     // editing_by_user 삭제
     final editingByUser = await albumRef.collection('editing_by_user').get();
     for (final d in editingByUser.docs) {
-      await d.reference.delete();
-    }
-
-    // editing_presence + members 삭제
-    final presence = await albumRef.collection('editing_presence').get();
-    for (final d in presence.docs) {
-      final members = await d.reference.collection('members').get();
-      for (final m in members.docs) {
-        await m.reference.delete();
-      }
       await d.reference.delete();
     }
 
@@ -184,16 +158,14 @@ class SharedAlbumService {
     if (allowMultiple) {
       picked = await _picker.pickMultiImage(imageQuality: 90);
     } else {
-      final single = await _picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 90,
-      );
+      final single =
+          await _picker.pickImage(source: ImageSource.gallery, imageQuality: 90);
       if (single != null) picked = [single];
     }
     if (picked.isEmpty) return;
 
-    final albumRef = _fs.collection('albums').doc(albumId);
-    final photosRef = albumRef.collection('photos');
+    final albumRef = _albumDoc(albumId);
+    final photosRef = _photosCol(albumId);
 
     int added = 0;
     String? lastUrl;
@@ -213,7 +185,7 @@ class SharedAlbumService {
         'storagePath': storagePath,
         'uploaderUid': uid,
         'createdAt': FieldValue.serverTimestamp(),
-        'likedBy': <String>[], // 👍 초기값 추가
+        'likedBy': <String>[],
       });
 
       added++;
@@ -240,8 +212,7 @@ class SharedAlbumService {
     required String albumId,
     required String photoId,
   }) async {
-    final photoRef =
-        _fs.collection('albums').doc(albumId).collection('photos').doc(photoId);
+    final photoRef = _photosCol(albumId).doc(photoId);
 
     final snap = await photoRef.get();
     if (!snap.exists) return;
@@ -256,7 +227,7 @@ class SharedAlbumService {
 
     await photoRef.delete();
 
-    final albumRef = _fs.collection('albums').doc(albumId);
+    final albumRef = _albumDoc(albumId);
     await _fs.runTransaction((tx) async {
       final a = await tx.get(albumRef);
       final d = a.data() ?? {};
@@ -270,9 +241,8 @@ class SharedAlbumService {
             .orderBy('createdAt', descending: true)
             .limit(1)
             .get();
-        newCover = latest.docs.isNotEmpty
-            ? latest.docs.first.data()['url'] as String
-            : null;
+        newCover =
+            latest.docs.isNotEmpty ? latest.docs.first.data()['url'] as String : null;
       }
 
       tx.update(albumRef, {
@@ -287,30 +257,22 @@ class SharedAlbumService {
     required String uid,
     required String albumId,
   }) {
-    final col = _fs
-        .collection('albums')
-        .doc(albumId)
-        .collection('photos')
-        .orderBy('createdAt', descending: true);
-
+    final col = _photosCol(albumId).orderBy('createdAt', descending: true);
     return col.snapshots().map(
-      (qs) => qs.docs.map((d) => Photo.fromMap(d.id, d.data())).toList(),
-    );
+          (qs) => qs.docs.map((d) => Photo.fromMap(d.id, d.data())).toList(),
+        );
   }
 
   Future<void> toggleLike({
     required String uid,
     required String albumId,
     required String photoId,
-    required bool like, // true면 추가, false면 제거
+    required bool like,
   }) async {
-    final ref =
-        _fs.collection('albums').doc(albumId).collection('photos').doc(photoId);
-
+    final ref = _photosCol(albumId).doc(photoId);
     await ref.update({
-      'likedBy': like
-          ? FieldValue.arrayUnion([uid])
-          : FieldValue.arrayRemove([uid]),
+      'likedBy':
+          like ? FieldValue.arrayUnion([uid]) : FieldValue.arrayRemove([uid]),
     });
   }
 
@@ -320,8 +282,7 @@ class SharedAlbumService {
     required String editedId,
     required String uid,
   }) async {
-    final ref =
-        _fs.collection('albums').doc(albumId).collection('edited').doc(editedId);
+    final ref = _editedCol(albumId).doc(editedId);
     await ref.update({
       'isEditing': true,
       'editingUid': uid,
@@ -334,8 +295,7 @@ class SharedAlbumService {
     required String albumId,
     required String editedId,
   }) async {
-    final ref =
-        _fs.collection('albums').doc(albumId).collection('edited').doc(editedId);
+    final ref = _editedCol(albumId).doc(editedId);
     await ref.update({
       'isEditing': false,
       'editingUid': null,
@@ -354,44 +314,51 @@ class SharedAlbumService {
     String source = 'original',
     String? editedId,
     String? originalPhotoId,
+    String? userDisplayName, // 추가: 이름 저장
   }) async {
     final ref = _editingByUserDoc(albumId, uid);
 
+    // 기존 startedAt 보존
+    Timestamp? existingStartedAt;
+    try {
+      final snap = await ref.get();
+      final data = snap.data();
+      if (snap.exists && data != null && data['startedAt'] is Timestamp) {
+        existingStartedAt = data['startedAt'] as Timestamp;
+      }
+    } catch (_) {}
+
+    // photoId 자동 보정
+    final effectivePhotoId = (photoId != null && photoId.isNotEmpty)
+        ? photoId
+        : ((originalPhotoId != null && originalPhotoId.isNotEmpty)
+            ? originalPhotoId
+            : null);
+
     await ref.set({
       'uid': uid,
-      if (photoId != null) 'photoId': photoId,
+      if (effectivePhotoId != null) 'photoId': effectivePhotoId,
       'photoUrl': photoUrl,
       'source': source,
       if (editedId != null) 'editedId': editedId,
       if (originalPhotoId != null) 'originalPhotoId': originalPhotoId,
+      if (userDisplayName != null && userDisplayName.isNotEmpty)
+        'userDisplayName': userDisplayName,
       'status': 'active',
-      'startedAt': FieldValue.serverTimestamp(),
+      'startedAt': existingStartedAt ?? FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    await _fs.collection('albums').doc(albumId).update({
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await _albumDoc(albumId)
+        .update({'updatedAt': FieldValue.serverTimestamp()});
   }
 
-  Future<void> touchEditing({
-    required String uid,
-    required String albumId,
-  }) async {
-    await _editingByUserDoc(albumId, uid).set({
-      'status': 'active',
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-  }
-
+  /// [DEPRECATED] 기존 호출 호환용: 이제는 '일시정지' 없이 바로 세션 종료 처리
   Future<void> pauseEditing({
     required String uid,
     required String albumId,
   }) async {
-    await _editingByUserDoc(albumId, uid).set({
-      'status': 'paused',
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    await endEditing(uid: uid, albumId: albumId);
   }
 
   Future<void> endEditing({
@@ -461,215 +428,124 @@ class SharedAlbumService {
     final ref = _editingByUserDoc(albumId, uid);
     return ref.snapshots().map((ds) {
       if (!ds.exists) return null;
-      return EditingInfo.fromDoc(albumId, ds.data()!);
+      return EditingInfo.fromDoc(albumId, ds.data()!, docId: ds.id);
     });
   }
 
-  // albums/{albumId}/editing_by_user 에서 active 세션 목록
+  // 앨범의 세션 실시간 목록 (active만)
   Stream<List<EditingInfo>> watchEditingForAlbum(String albumId) {
-    final col = _editingByUserCol(albumId);
-    final q = col
+    final q = _editingByUserCol(albumId)
         .where('status', isEqualTo: 'active')
         .orderBy('updatedAt', descending: true)
-        .limit(100);
-
+        .limit(300);
     return q.snapshots().map((qs) {
       return qs.docs
-          .map((d) => EditingInfo.fromDoc(albumId, d.data()))
+          .map((d) => EditingInfo.fromDoc(albumId, d.data(), docId: d.id))
           .where((e) => e.photoUrl.trim().isNotEmpty)
           .toList();
     });
   }
 
-  // ===== 프레즌스 + 실시간 프리뷰 (editing_presence/{photoId}) =====
+  // ===== 사진별 편집자 =====
 
-  Future<void> enterEditingPresence({
-    required String albumId,
-    required String photoId,
-    required String uid,
-    required String name,
-  }) async {
-    final summaryRef = _presenceSummaryDoc(albumId, photoId);
-    final memberRef = _presenceMembersCol(albumId, photoId).doc(uid);
-
-    await _fs.runTransaction((tx) async {
-      final memberSnap = await tx.get(memberRef);
-      final existed = memberSnap.exists;
-
-      tx.set(memberRef, {
-        'uid': uid,
-        'name': name,
-        // [변경] 멤버 활성 판정 기준을 lastSeenAt으로 단일화
-        'lastSeenAt': FieldValue.serverTimestamp(), // [변경]
-        // (previewUrl은 updateEditingPreviewPresence에서 갱신)
-      }, SetOptions(merge: true));
-
-      final sumSnap = await tx.get(summaryRef);
-      String? topName =
-          sumSnap.exists ? (sumSnap.data()?['topEditorName'] as String?) : null;
-
-      tx.set(summaryRef, {
-        'photoId': photoId,
-        'isEditing': true,
-        if (!existed) 'editorsCount': FieldValue.increment(1),
-        'topEditorName': topName ?? name,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    });
-  }
-
-  Future<void> heartbeatEditingPresence({
-    required String albumId,
-    required String photoId,
-    required String uid,
-  }) async {
-    final memberRef = _presenceMembersCol(albumId, photoId).doc(uid);
-    await memberRef.set({
-      // [변경] lastSeenAt만 갱신 (활성 사용자 판정용)
-      'lastSeenAt': FieldValue.serverTimestamp(), // [변경]
-    }, SetOptions(merge: true));
-  }
-
-  Future<void> updateEditingPreviewPresence({
-    required String albumId,
-    required String photoId,
-    required String uid,
-    required String previewUrl,
-  }) async {
-    final summaryRef = _presenceSummaryDoc(albumId, photoId);
-    final memberRef = _presenceMembersCol(albumId, photoId).doc(uid);
-
-    await _fs.runTransaction((tx) async {
-      tx.set(memberRef, {
-        'previewUrl': previewUrl,
-        // [변경] 프리뷰 업로드도 최근 활동으로 간주
-        'lastSeenAt': FieldValue.serverTimestamp(), // [변경]
-      }, SetOptions(merge: true));
-
-      tx.set(summaryRef, {
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    });
-  }
-
-  Future<void> leaveEditingPresence({
-    required String albumId,
-    required String photoId,
-    required String uid,
-  }) async {
-    final summaryRef = _presenceSummaryDoc(albumId, photoId);
-    final memberRef = _presenceMembersCol(albumId, photoId).doc(uid);
-
-    String? leavingName;
-    String? currentTopName;
-    bool existed = false;
-
-    await _fs.runTransaction((tx) async {
-      final mySnap = await tx.get(memberRef);
-      existed = mySnap.exists;
-      if (existed) {
-        final md = mySnap.data() as Map<String, dynamic>;
-        leavingName = md['name'] as String?;
-        tx.delete(memberRef);
-      }
-
-      final sumSnap = await tx.get(summaryRef);
-      if (sumSnap.exists) {
-        final d = sumSnap.data() as Map<String, dynamic>;
-        currentTopName = d['topEditorName'] as String?;
-        tx.set(summaryRef, {
-          if (existed) 'editorsCount': FieldValue.increment(-1),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-    });
-
-    final after = await summaryRef.get();
-    if (!after.exists) return;
-    final data = after.data() as Map<String, dynamic>;
-    final count = (data['editorsCount'] ?? 0) as int;
-
-    if (count <= 0) {
-      await summaryRef.set({
-        'isEditing': false,
-        'editorsCount': 0,
-        'topEditorName': null,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      return;
-    }
-
-    final iWasTop = (leavingName != null && leavingName == currentTopName);
-    if (iWasTop) {
-      final newest = await _presenceMembersCol(
-        albumId,
-        photoId,
-      ).orderBy('lastSeenAt', descending: true).limit(1).get(); // [변경]
-      String? newTop =
-          newest.docs.isNotEmpty ? (newest.docs.first.data()['name'] as String?) : null;
-
-      await summaryRef.set({
-        'isEditing': true,
-        'topEditorName': newTop,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } else {
-      await summaryRef.set({
-        'isEditing': true,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
-  }
-
-  // 요약 스트림: EditScreen 배지용
-  Stream<DocumentSnapshot<Map<String, dynamic>>> editingSummaryStream({
+  // 사진별 "편집 중 인원수" 실시간 (active만)
+  Stream<int> watchActiveEditorCount({
     required String albumId,
     required String photoId,
   }) {
-    return _presenceSummaryDoc(albumId, photoId).snapshots();
+    final q = _editingByUserCol(albumId)
+        .where('status', isEqualTo: 'active')
+        .where('photoId', isEqualTo: photoId);
+    return q.snapshots().map((qs) => qs.docs.length);
   }
 
-  // =========================
-  // [변경] 멤버 스트림: **활성 사용자만** 보이도록 cutoff 적용
-  //   - edit_view_screen.dart 의 "편집 중 N"과 타인 프리뷰가 일치하도록
-  //   - collectionGroup('members') + lastSeenAt > cutoff
-  // =========================
-  Stream<QuerySnapshot<Map<String, dynamic>>> editingMembersStream({
+  // 사진별 "편집 중 사용자들" 실시간(실제 작업 중만: active)
+  Stream<List<EditingInfo>> watchEditorsOfPhotoRT({
     required String albumId,
     required String photoId,
   }) {
-    final cutoff =
-        DateTime.now().subtract(Duration(seconds: presenceAliveSeconds)); // [추가]
-    return _fs
-        .collectionGroup('members') // [변경]
-        .where('albumId', isEqualTo: albumId)
+    final q = _editingByUserCol(albumId)
+        .where('status', isEqualTo: 'active')
         .where('photoId', isEqualTo: photoId)
-        .where('lastSeenAt', isGreaterThan: Timestamp.fromDate(cutoff)) // [변경]
-        .snapshots();
+        .orderBy('updatedAt', descending: true)
+        .limit(50);
+    return q.snapshots().map(
+          (qs) =>
+              qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data(), docId: d.id)).toList(),
+        );
   }
 
-  // =========================
-  // [추가] 앨범 내 "편집 중인 사진(photoId들)" 스트림
-  //   - 상단 캐러셀 등에서 "편집 중인 사진 없음"이 정확히 동기화되도록
-  // =========================
-  Stream<List<String>> watchingPhotoIdsBeingEdited({
-    required String albumId,
-  }) {
-    final cutoff =
-        DateTime.now().subtract(Duration(seconds: presenceAliveSeconds)); // [추가]
-    return _fs
-        .collectionGroup('members') // [추가]
-        .where('albumId', isEqualTo: albumId)
-        .where('lastSeenAt', isGreaterThan: Timestamp.fromDate(cutoff))
-        .snapshots()
-        .map((snap) {
-          final set = <String>{};
-          for (final d in snap.docs) {
-            final pid = d.data()['photoId'] as String? ?? '';
-            if (pid.isNotEmpty) set.add(pid);
-          }
-          return set.toList();
-        });
+  // 앨범의 세션(단발성) - active만
+  Future<List<EditingInfo>> fetchActiveEditingSessions(String albumId) async {
+    final qs = await _editingByUserCol(albumId)
+        .where('status', isEqualTo: 'active')
+        .orderBy('updatedAt', descending: true)
+        .limit(300)
+        .get();
+
+    return qs.docs
+        .map((d) => EditingInfo.fromDoc(albumId, d.data(), docId: d.id))
+        .where((e) => e.photoUrl.trim().isNotEmpty)
+        .toList();
+  }
+
+  // 사진별 "편집 중 사용자들" 단발성(작업 중만: active)
+  Future<List<EditingInfo>> fetchEditorsOfPhoto(
+    String albumId,
+    String photoId,
+  ) async {
+    final qs = await _editingByUserCol(albumId)
+        .where('status', isEqualTo: 'active')
+        .where('photoId', isEqualTo: photoId)
+        .orderBy('updatedAt', descending: true)
+        .limit(50)
+        .get();
+
+    return qs.docs
+        .map((d) => EditingInfo.fromDoc(albumId, d.data(), docId: d.id))
+        .toList();
+  }
+
+  // 앨범에서 현재 '작업중(active)' 사진 ID 집합(단발성)
+  Future<List<String>> fetchPhotoIdsBeingEditedFromSessions(
+    String albumId,
+  ) async {
+    final qs = await _editingByUserCol(albumId)
+        .where('status', isEqualTo: 'active')
+        .orderBy('updatedAt', descending: true)
+        .limit(300)
+        .get();
+
+    final set = <String>{};
+    for (final d in qs.docs) {
+      final m = d.data();
+      final pid =
+          (m['photoId'] as String?) ?? (m['originalPhotoId'] as String?) ?? '';
+      if (pid.isNotEmpty) set.add(pid);
+    }
+    return set.toList();
+  }
+
+  /// '편집중 배지'로 표시해야 할 **사진 고유 ID 리스트**(단발성, active만)
+  /// - photoId > originalPhotoId > editedId 우선순위로 키 생성 및 dedupe
+  Future<List<String>> fetchEditingPhotoIds(String albumId) async {
+    final qs = await _editingByUserCol(albumId)
+        .where('status', isEqualTo: 'active')
+        .orderBy('updatedAt', descending: true)
+        .limit(300)
+        .get();
+
+    final set = <String>{};
+    for (final d in qs.docs) {
+      final m = d.data();
+      final key = (m['photoId'] as String?)?.trim().isNotEmpty == true
+          ? (m['photoId'] as String).trim()
+          : (m['originalPhotoId'] as String?)?.trim().isNotEmpty == true
+              ? (m['originalPhotoId'] as String).trim()
+              : (m['editedId'] as String?)?.trim() ?? '';
+      if (key.isNotEmpty) set.add(key);
+    }
+    return set.toList();
   }
 
   // ===== 편집본 저장 (edited/*) =====
@@ -690,8 +566,7 @@ class SharedAlbumService {
     required String editedUrl,
     String? storagePath,
   }) async {
-    final editedRef =
-        _fs.collection('albums').doc(albumId).collection('edited').doc();
+    final editedRef = _editedCol(albumId).doc();
 
     await editedRef.set({
       'url': editedUrl,
@@ -719,8 +594,7 @@ class SharedAlbumService {
     String? originalPhotoId,
     String? storagePath,
   }) async {
-    final ref =
-        _fs.collection('albums').doc(albumId).collection('edited').doc();
+    final ref = _editedCol(albumId).doc();
     await ref.set({
       'url': url,
       'storagePath': storagePath,
@@ -732,9 +606,8 @@ class SharedAlbumService {
       'editingUid': null,
       'editingStartedAt': null,
     });
-    await _fs.collection('albums').doc(albumId).update({
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await _albumDoc(albumId)
+        .update({'updatedAt': FieldValue.serverTimestamp()});
 
     if (originalPhotoId != null && originalPhotoId.isNotEmpty) {
       await clearEditingForTarget(
@@ -753,8 +626,7 @@ class SharedAlbumService {
     String? newStoragePath,
     bool deleteOld = true,
   }) async {
-    final ref =
-        _fs.collection('albums').doc(albumId).collection('edited').doc(editedId);
+    final ref = _editedCol(albumId).doc(editedId);
 
     String? oldStoragePath;
     try {
@@ -773,9 +645,8 @@ class SharedAlbumService {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    await _fs.collection('albums').doc(albumId).update({
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+    await _albumDoc(albumId)
+        .update({'updatedAt': FieldValue.serverTimestamp()});
 
     if (deleteOld &&
         oldStoragePath != null &&
@@ -790,15 +661,10 @@ class SharedAlbumService {
   }
 
   Stream<List<EditedPhoto>> watchEditedPhotos(String albumId) {
-    final q = _fs
-        .collection('albums')
-        .doc(albumId)
-        .collection('edited')
-        .orderBy('createdAt', descending: true);
-
+    final q = _editedCol(albumId).orderBy('createdAt', descending: true);
     return q.snapshots().map(
-      (qs) => qs.docs.map((d) => EditedPhoto.fromDoc(d.id, d.data())).toList(),
-    );
+          (qs) => qs.docs.map((d) => EditedPhoto.fromDoc(d.id, d.data())).toList(),
+        );
   }
 
   Future<void> deleteEditedPhoto({
@@ -807,8 +673,7 @@ class SharedAlbumService {
   }) async {
     if (albumId == null) throw ArgumentError('albumId is null');
 
-    final ref =
-        _fs.collection('albums').doc(albumId).collection('edited').doc(editedId);
+    final ref = _editedCol(albumId).doc(editedId);
     String? storagePath;
     try {
       final snap = await ref.get();
@@ -886,13 +751,9 @@ class Album {
 class Photo {
   final String id;
   final String url;
-  final List<String> likedBy; // 👍 누른 uid 목록
+  final List<String> likedBy;
 
-  Photo({
-    required this.id,
-    required this.url,
-    this.likedBy = const [],
-  });
+  Photo({required this.id, required this.url, this.likedBy = const []});
 
   factory Photo.fromMap(String id, Map<String, dynamic> m) {
     return Photo(
@@ -904,10 +765,7 @@ class Photo {
   }
 
   Map<String, dynamic> toMap() {
-    return {
-      'url': url,
-      'likedBy': likedBy,
-    };
+    return {'url': url, 'likedBy': likedBy};
   }
 }
 
@@ -920,6 +778,9 @@ class EditingInfo {
   final String? originalPhotoId;
   final String? status;
   final Timestamp? updatedAt;
+  final String? uid;
+  final Timestamp? startedAt; // 가장 먼저 들어간 시각
+  final String? userDisplayName;
 
   EditingInfo({
     required this.albumId,
@@ -930,9 +791,16 @@ class EditingInfo {
     this.originalPhotoId,
     this.status,
     this.updatedAt,
+    this.uid,
+    this.startedAt,
+    this.userDisplayName,
   });
 
-  factory EditingInfo.fromDoc(String albumId, Map<String, dynamic> d) {
+  factory EditingInfo.fromDoc(
+    String albumId,
+    Map<String, dynamic> d, {
+    String? docId,
+  }) {
     return EditingInfo(
       albumId: albumId,
       photoId: d['photoId'] as String?,
@@ -942,6 +810,9 @@ class EditingInfo {
       originalPhotoId: d['originalPhotoId'] as String?,
       status: d['status'] as String?,
       updatedAt: d['updatedAt'] as Timestamp?,
+      uid: (d['uid'] as String?) ?? docId,
+      startedAt: d['startedAt'] as Timestamp?,
+      userDisplayName: d['userDisplayName'] as String?,
     );
   }
 }

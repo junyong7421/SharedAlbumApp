@@ -4,7 +4,7 @@ import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import 'edit_view_screen.dart';
 import 'dart:math';
-import 'package:cloud_firestore/cloud_firestore.dart'; // ✅ 추가
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 // 서비스 + 모델 (Album, Photo 포함)
 import '../services/shared_album_service.dart';
@@ -25,6 +25,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
   int? _selectedImageIndex;
 
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
+
+  // 중복 네비게이션 가드
+  bool _isNavigating = false;
 
   @override
   void dispose() {
@@ -277,14 +280,55 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
           _selectedImageIndex = null;
         }
       });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('앨범이 삭제되었습니다.')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
+    }
+  }
+
+  // ---------------------- 편집 화면 진입 공용 함수 ----------------------
+  Future<void> _openEditor({
+    required Photo photo,
+    required String albumId,
+    required String albumTitle,
+  }) async {
+    if (_isNavigating) return;
+    _isNavigating = true;
+
+    // await 전에 NavigatorState 확보
+    final nav = Navigator.of(context);
+
+    try {
+      await _svc.setEditing(
+        uid: _uid,
+        albumId: albumId,
+        photoUrl: photo.url,
+        source: 'original',
+        photoId: photo.id,
+        originalPhotoId: photo.id,
+      );
+
+      if (!mounted) return;
+      await nav.push(
+        MaterialPageRoute(
+          builder: (_) => EditViewScreen(
+            albumName: albumTitle,
+            albumId: albumId,
+            imagePath: photo.url,
+            originalPhotoId: photo.id,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('편집 화면 진입 실패: $e')),
+        );
+      }
+    } finally {
+      _isNavigating = false;
     }
   }
 
@@ -391,11 +435,8 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
   Widget _buildMainAlbumList() {
     return StreamBuilder<List<Album>>(
-      stream: _svc.watchAlbums(
-        _uid,
-      ), // memberUids array-contains + updatedAt desc
+      stream: _svc.watchAlbums(_uid),
       builder: (context, snap) {
-        // 에러 표시 (인덱스/권한 문제 진단)
         if (snap.hasError) {
           return Center(
             child: Padding(
@@ -525,7 +566,6 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     final albumId = _selectedAlbumId!;
     final title = _selectedAlbumTitle ?? '앨범';
 
-    // ✅ 앨범 멤버 구독해서 memberUids → totalSlots/색 매핑에 활용
     final albumDocRef = FirebaseFirestore.instance.collection('albums').doc(albumId);
 
     return Column(
@@ -602,7 +642,6 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
               final List<String> albumMembers =
                   ((albumData['memberUids'] ?? []) as List).map((e) => e.toString()).toList();
 
-              // 너무 많으면 조각이 얇아지니 가독성 위해 12로 제한 (필요시 조정)
               final totalSlots = max(1, min(albumMembers.length, 12));
 
               return StreamBuilder<List<Photo>>(
@@ -653,10 +692,8 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                         final isLikedByMe = likedUids.contains(_uid);
                         final likedColors = likedUids.map((u) => colorForUid(u)).toList();
 
-                        // ✅ 좋아요 수(m) = 분할 수. 1명이면 1 → 꽉 찬 단색, 0이면 비어있음
-final m = likedUids.length;
-final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m); // 가독성 위해 최대 12조각
-
+                        final m = likedUids.length;
+                        final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m);
 
                         return GestureDetector(
                           onTap: () => setState(() => _selectedImageIndex = i),
@@ -678,26 +715,26 @@ final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m); // 가독성 위해 
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     segmentedHeart(
-  totalSlots: totalSlotsForRender,
-  filledColors: likedColors.take(totalSlotsForRender).toList(),
-  size: 18,
-  isLikedByMe: isLikedByMe,
-  onTap: () async { 
-    try {
-      await _svc.toggleLike(
-        uid: _uid,
-        albumId: albumId,
-        photoId: p.id,
-        like: !isLikedByMe,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('좋아요 실패: $e')),
-      );
-    }
-  },
-),
+                                      totalSlots: totalSlotsForRender,
+                                      filledColors: likedColors.take(totalSlotsForRender).toList(),
+                                      size: 18,
+                                      isLikedByMe: isLikedByMe,
+                                      onTap: () async {
+                                        try {
+                                          await _svc.toggleLike(
+                                            uid: _uid,
+                                            albumId: albumId,
+                                            photoId: p.id,
+                                            like: !isLikedByMe,
+                                          );
+                                        } catch (e) {
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(content: Text('좋아요 실패: $e')),
+                                          );
+                                        }
+                                      },
+                                    ),
                                     const SizedBox(width: 4),
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -733,9 +770,8 @@ final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m); // 가독성 위해 
                         final isLikedByMe = likedUids.contains(_uid);
                         final likedColors = likedUids.map((u) => colorForUid(u)).toList();
 
-                        // ✅ m명이면 m등분, 1명이면 꽉 찬 단색
-final m = likedUids.length;
-final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m);
+                        final m = likedUids.length;
+                        final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m);
 
                         return Column(
                           children: [
@@ -746,53 +782,34 @@ final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m);
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    // ❤️ 하트
                                     segmentedHeart(
-  totalSlots: totalSlotsForRender,
-  filledColors: likedColors.take(totalSlotsForRender).toList(),
-  size: 28,
-  isLikedByMe: isLikedByMe,
-  onTap: () async {
-    try {
-      await _svc.toggleLike(
-        uid: _uid,
-        albumId: albumId,
-        photoId: p.id,
-        like: !isLikedByMe,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('좋아요 실패: $e')),
-      );
-    }
-  },
-),
+                                      totalSlots: totalSlotsForRender,
+                                      filledColors: likedColors.take(totalSlotsForRender).toList(),
+                                      size: 28,
+                                      isLikedByMe: isLikedByMe,
+                                      onTap: () async {
+                                        try {
+                                          await _svc.toggleLike(
+                                            uid: _uid,
+                                            albumId: albumId,
+                                            photoId: p.id,
+                                            like: !isLikedByMe,
+                                          );
+                                        } catch (e) {
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(content: Text('좋아요 실패: $e')),
+                                          );
+                                        }
+                                      },
+                                    ),
                                     const SizedBox(width: 12),
                                     GestureDetector(
-                                      onTap: () async {
-                                        // 1. 편집 상태 Firestore에 저장
-                                        await _svc.setEditing(
-                                          uid: _uid,
-                                          albumId: albumId,
-                                          photoUrl: p.url,
-                                          source: 'photos', // 원본에서 편집 시작
-                                          originalPhotoId: p.id, // 원본 photoId 전달
-                                        );
-                                        // 2. 편집 화면으로 이동
-                                        if (!mounted) return;
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (context) => EditViewScreen(
-                                              albumName: title,
-                                              albumId: albumId, // 저장/덮어쓰기 시 필요
-                                              imagePath: p.url,
-                                              originalPhotoId: p.id,
-                                            ),
-                                          ),
-                                        );
-                                      },
+                                      onTap: () => _openEditor(
+                                        photo: p,
+                                        albumId: albumId,
+                                        albumTitle: title,
+                                      ),
                                       child: _pill("편집하기"),
                                     ),
                                     const SizedBox(width: 8),
