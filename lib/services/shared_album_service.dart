@@ -24,15 +24,17 @@ class OpsCursor {
 /// Firestore 구조(요지, 경로 분리 적용)
 /// albums/{albumId}
 ///   - title, ownerUid, memberUids[], photoCount, coverPhotoUrl, createdAt, updatedAt
-///   photos/{photoId}
-///     - url, storagePath, uploaderUid, createdAt, likedBy[]
-///   edited/{editedId}
-///     - url, storagePath, originalPhotoId?, editorUid, createdAt, updatedAt,
-///       isEditing, editingUid, editingStartedAt
+/// photos/{photoId}
+///   - url, storagePath, uploaderUid, createdAt, likedBy[]
+/// edited/{editedId}
+///   - url, storagePath, originalPhotoId?, editorUid, createdAt, updatedAt,
+///     isEditing, editingUid, editingStartedAt,
+///     lastCommitUid, lastCommitAt, saveToken,
+///     **rootPhotoId**   // [추가][root] 최상위 원본(항상 photos/*의 id)
 ///
 /// 편집 세션 (유저별)
 ///   editing_by_user/{uid}
-///     - uid, photoId?, photoUrl, source('original'|'edited'),
+///     - uid, **photoId(rootPhotoId로 고정)**, photoUrl, source('original'|'edited'),
 ///       editedId?, originalPhotoId?, status('active'),
 ///       userDisplayName?, startedAt, updatedAt
 ///
@@ -80,16 +82,61 @@ class SharedAlbumService {
   }
   // -----------------------------------
 
+  // -----------------------------
+  // [추가][root] 루트 ID 해석 유틸
+  // -----------------------------
+  /// 항상 **최상위 원본 photos/* 의 id** 를 반환.
+  /// - original을 편집: originalPhotoId 또는 photoId 자체가 root
+  /// - edited를 재편집: edited/{editedId}.originalPhotoId 를 root로 사용
+  Future<String> _resolveRootPhotoId({
+    required String albumId,
+    String? photoId,          // 원본 편집 진입 시 전달되기도 함
+    String? originalPhotoId,  // 원본 id가 이미 있으면 최우선
+    String? editedId,         // 재편집 진입 시 전달
+  }) async {
+    // 1) 명시 originalPhotoId가 있으면 그것이 곧 root
+    if (originalPhotoId != null && originalPhotoId.isNotEmpty) {
+      return originalPhotoId;
+    }
+
+    // 2) 재편집: edited 문서에서 originalPhotoId를 가져와 root로 사용
+    if (editedId != null && editedId.isNotEmpty) {
+      try {
+        final snap = await _editedCol(albumId).doc(editedId).get();
+        final d = snap.data();
+        final opid = d?['originalPhotoId'] as String?;
+        if (opid != null && opid.isNotEmpty) return opid;
+      } catch (_) {}
+    }
+
+    // 3) 원본 편집: 전달된 photoId가 원본이므로 그것을 root로
+    if (photoId != null && photoId.isNotEmpty) {
+      return photoId;
+    }
+
+    throw StateError('[root] rootPhotoId를 해석할 수 없습니다.');
+  }
+
   // ====== Cloud Function 호출 래퍼 (enqueueOp) ======
   /// 실시간 편집 OP 전송
   /// - 서버(Functions)에서 Firestore albums/{albumId}/ops 에 적재됨
-  /// - 클라에서는 ops 컬렉션을 photoId 기준으로 구독
+  /// - 클라에서는 ops 컬렉션을 **rootPhotoId** 기준으로 구독
   Future<void> sendEditOp({
     required String albumId,
-    required String photoId, // 보통 originalPhotoId
+    String? photoId,          // (원본 또는 미지정)
+    String? originalPhotoId,  // (있으면 우선)
+    String? editedId,         // (재편집일 수 있음)
     required Map<String, dynamic> op, // {type, data, by}
   }) async {
     await _ensureReady();
+
+    // [변경][root] 항상 rootPhotoId로 통일하여 발행
+    final rootPhotoId = await _resolveRootPhotoId(
+      albumId: albumId,
+      photoId: photoId,
+      originalPhotoId: originalPhotoId,
+      editedId: editedId,
+    );
 
     // [추가] op 메타 보강: 중복 방지/추적용
     final uid = FirebaseAuth.instance.currentUser!.uid;
@@ -106,8 +153,8 @@ class SharedAlbumService {
     );
 
     Future<void> _call() async {
-      // [변경] op에 opId/editorUid 포함시켜 전송
-      await callable.call({'albumId': albumId, 'photoId': photoId, 'op': enriched});
+      // [변경][root] photoId → 항상 root를 보냄
+      await callable.call({'albumId': albumId, 'photoId': rootPhotoId, 'op': enriched});
     }
 
     try {
@@ -130,10 +177,10 @@ class SharedAlbumService {
   }
 
   // ===== 편집 이벤트(ops) 실시간 구독 =====
-  /// 같은 photoId에 대한 OP를 createdAt → docId 순으로 정렬
+  /// 같은 **rootPhotoId** 에 대한 OP를 createdAt → docId 순으로 정렬
   Stream<List<Map<String, dynamic>>> watchEditOps({
     required String albumId,
-    required String photoId,
+    required String photoId, // [주의] 여기에는 **rootPhotoId** 를 넣어야 함
   }) {
     final q = _albumDoc(albumId)
         .collection('ops')
@@ -157,7 +204,7 @@ class SharedAlbumService {
   /// 현재 사진을 편집 중인 active 편집자 수(단발성)
   Future<int> fetchActiveEditorCountForPhoto({
     required String albumId,
-    required String photoId,
+    required String photoId, // [주의] rootPhotoId로 호출 권장
   }) async {
     final qs = await _editingByUserCol(albumId)
         .where('status', isEqualTo: 'active')
@@ -170,7 +217,7 @@ class SharedAlbumService {
   /// 특정 사진의 ops 전부 삭제(배치로 안전하게)
   Future<void> cleanupOpsForPhoto({
     required String albumId,
-    required String photoId,
+    required String photoId, // [주의] rootPhotoId로 호출
     int batchSize = 400,
   }) async {
     final col = _albumDoc(albumId).collection('ops');
@@ -193,7 +240,7 @@ class SharedAlbumService {
   /// active 편집자가 없을 때에만 ops 비우기(경합 안전)
   Future<void> tryCleanupOpsIfNoEditors({
     required String albumId,
-    required String photoId,
+    required String photoId, // [주의] rootPhotoId로 호출
   }) async {
     final cnt = await fetchActiveEditorCountForPhoto(
       albumId: albumId,
@@ -209,7 +256,7 @@ class SharedAlbumService {
   // [추가] ops 초기 캐치업(커서 이후만 정렬 적용)
   Future<List<Map<String, dynamic>>> fetchEditOpsCatchup({
     required String albumId,
-    required String photoId,
+    required String photoId, // [주의] rootPhotoId
     OpsCursor? cursor,
   }) async {
     final col = _albumDoc(albumId).collection('ops');
@@ -227,13 +274,12 @@ class SharedAlbumService {
     final List<Map<String, dynamic>> out = [];
 
     for (final d in qs.docs) {
-      final m = d.data(); // QueryDocumentSnapshot는 non-null이지만 방어적으로 유지
+      final m = d.data();
       if (m == null) continue;
 
       final ts = m['createdAt'] as Timestamp?;
       final id = d.id;
 
-      // 커서가 없으면 모두 통과
       bool pass = (cursor == null || cursor.createdAt == null);
       if (!pass && ts != null) {
         final curMs = cursor!.createdAt!.millisecondsSinceEpoch;
@@ -258,7 +304,7 @@ class SharedAlbumService {
   // [추가] ops 꼬리 스트림(커서 '초과'만 흘려보냄)
   Stream<List<Map<String, dynamic>>> watchEditOpsTail({
     required String albumId,
-    required String photoId,
+    required String photoId, // [주의] rootPhotoId
     required OpsCursor cursor,
   }) {
     final q = _albumDoc(albumId)
@@ -586,12 +632,12 @@ class SharedAlbumService {
   Future<void> setEditing({
     required String uid,
     required String albumId,
-    String? photoId,
+    String? photoId,            // 원본일 수도 있음
     required String photoUrl,
-    String source = 'original',
-    String? editedId,
-    String? originalPhotoId,
-    String? userDisplayName, // 추가: 이름 저장
+    String source = 'original', // 'original' | 'edited'
+    String? editedId,           // 재편집이면 전달됨
+    String? originalPhotoId,    // 가능하면 전달
+    String? userDisplayName,    // 추가: 이름 저장
   }) async {
     final ref = _editingByUserDoc(albumId, uid);
 
@@ -605,16 +651,17 @@ class SharedAlbumService {
       }
     } catch (_) {}
 
-    // photoId 자동 보정(원본 우선)
-    final effectivePhotoId = (photoId != null && photoId.isNotEmpty)
-        ? photoId
-        : ((originalPhotoId != null && originalPhotoId.isNotEmpty)
-            ? originalPhotoId
-            : null);
+    // [변경][root] 세션의 photoId는 항상 **rootPhotoId** 로 저장
+    final rootPhotoId = await _resolveRootPhotoId(
+      albumId: albumId,
+      photoId: photoId,
+      originalPhotoId: originalPhotoId,
+      editedId: editedId,
+    );
 
     await ref.set({
       'uid': uid,
-      if (effectivePhotoId != null) 'photoId': effectivePhotoId,
+      'photoId': rootPhotoId, // [중요][root]
       'photoUrl': photoUrl,
       'source': source,
       if (editedId != null) 'editedId': editedId,
@@ -744,7 +791,7 @@ class SharedAlbumService {
   // 사진별 "편집 중 인원수" 실시간 (active만)
   Stream<int> watchActiveEditorCount({
     required String albumId,
-    required String photoId,
+    required String photoId, // [주의] rootPhotoId
   }) {
     final q = _editingByUserCol(albumId)
         .where('status', isEqualTo: 'active')
@@ -755,7 +802,7 @@ class SharedAlbumService {
   // 사진별 "편집 중 사용자들" 실시간(실제 작업 중만: active)
   Stream<List<EditingInfo>> watchEditorsOfPhotoRT({
     required String albumId,
-    required String photoId,
+    required String photoId, // [주의] rootPhotoId
   }) {
     final q = _editingByUserCol(albumId)
         .where('status', isEqualTo: 'active')
@@ -786,7 +833,7 @@ class SharedAlbumService {
   // 사진별 "편집 중 사용자들" 단발성(작업 중만: active)
   Future<List<EditingInfo>> fetchEditorsOfPhoto(
     String albumId,
-    String photoId,
+    String photoId, // [주의] rootPhotoId
   ) async {
     final qs = await _editingByUserCol(albumId)
         .where('status', isEqualTo: 'active')
@@ -821,7 +868,7 @@ class SharedAlbumService {
   }
 
   /// '편집중 배지'로 표시해야 할 **사진 고유 ID 리스트**(단발성, active만)
-  /// - photoId > originalPhotoId > editedId 우선순위로 키 생성 및 dedupe
+  /// - **photoId(=rootPhotoId)** > originalPhotoId > editedId 우선순위
   Future<List<String>> fetchEditingPhotoIds(String albumId) async {
     final qs = await _editingByUserCol(albumId)
         .where('status', isEqualTo: 'active')
@@ -853,14 +900,14 @@ class SharedAlbumService {
     return 'albums/$albumId/edited/$photoId/$ts.$ext';
   }
 
-  // [변경] 마지막 커밋 주체 기록 필드 추가(lastCommitUid/At, saveToken)
+  // [변경][root] 마지막 커밋 주체 기록 + **rootPhotoId 저장**
   Future<void> saveEditedPhotoFromUrl({
     required String albumId,
     required String editorUid,
-    required String originalPhotoId,
+    required String originalPhotoId, // 원본 id(=root)
     required String editedUrl,
     String? storagePath,
-    String? saveToken, // [추가]
+    String? saveToken,
   }) async {
     final editedRef = _editedCol(albumId).doc();
 
@@ -875,9 +922,11 @@ class SharedAlbumService {
       'editingUid': null,
       'editingStartedAt': null,
 
-      'lastCommitUid': editorUid,                   // [추가]
-      'lastCommitAt': FieldValue.serverTimestamp(), // [추가]
-      if (saveToken != null) 'saveToken': saveToken, // [추가]
+      'lastCommitUid': editorUid,
+      'lastCommitAt': FieldValue.serverTimestamp(),
+      if (saveToken != null) 'saveToken': saveToken,
+
+      'rootPhotoId': originalPhotoId, // [추가][root]
     });
 
     await clearEditingForTarget(
@@ -887,20 +936,26 @@ class SharedAlbumService {
     );
   }
 
-  // [변경] 마지막 커밋 주체 기록 필드 추가(lastCommitUid/At, saveToken)
+  // [변경][root] 마지막 커밋 주체 기록 + **rootPhotoId 저장**
   Future<void> saveEditedPhoto({
     required String albumId,
     required String url,
     required String editorUid,
-    String? originalPhotoId,
+    String? originalPhotoId,   // 있으면 root로 사용
     String? storagePath,
-    String? saveToken, // [추가]
+    String? saveToken,
   }) async {
     final ref = _editedCol(albumId).doc();
+
+    // [추가][root] 저장 시에도 root 보장(없으면 에러)
+    if (originalPhotoId == null || originalPhotoId.isEmpty) {
+      throw ArgumentError('[root] saveEditedPhoto에는 originalPhotoId가 필요합니다.');
+    }
+
     await ref.set({
       'url': url,
       'storagePath': storagePath,
-      if (originalPhotoId != null) 'originalPhotoId': originalPhotoId,
+      'originalPhotoId': originalPhotoId,
       'editorUid': editorUid,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
@@ -908,20 +963,20 @@ class SharedAlbumService {
       'editingUid': null,
       'editingStartedAt': null,
 
-      'lastCommitUid': editorUid,                   // [추가]
-      'lastCommitAt': FieldValue.serverTimestamp(), // [추가]
-      if (saveToken != null) 'saveToken': saveToken, // [추가]
+      'lastCommitUid': editorUid,
+      'lastCommitAt': FieldValue.serverTimestamp(),
+      if (saveToken != null) 'saveToken': saveToken,
+
+      'rootPhotoId': originalPhotoId, // [추가][root]
     });
     await _albumDoc(albumId)
         .update({'updatedAt': FieldValue.serverTimestamp()});
 
-    if (originalPhotoId != null && originalPhotoId.isNotEmpty) {
-      await clearEditingForTarget(
-        albumId: albumId,
-        originalPhotoId: originalPhotoId,
-        photoId: originalPhotoId,
-      );
-    }
+    await clearEditingForTarget(
+      albumId: albumId,
+      originalPhotoId: originalPhotoId,
+      photoId: originalPhotoId,
+    );
   }
 
   Future<void> ensureAuthAndAppCheckReady() => _ensureReady();
@@ -943,7 +998,7 @@ class SharedAlbumService {
     print('whoAmI -> $res');
   }
 
-  // [변경] 마지막 커밋 주체 기록 필드 추가(lastCommitUid/At, saveToken)
+  // [변경][root] 마지막 커밋 주체 기록 + **rootPhotoId 유지**
   Future<void> saveEditedPhotoOverwrite({
     required String albumId,
     required String editedId,
@@ -951,15 +1006,18 @@ class SharedAlbumService {
     required String editorUid,
     String? newStoragePath,
     bool deleteOld = true,
-    String? saveToken, // [추가]
+    String? saveToken,
   }) async {
     final ref = _editedCol(albumId).doc(editedId);
 
     String? oldStoragePath;
+    String? rootPhotoId; // [추가][root]
     try {
       final snap = await ref.get();
       final data = snap.data();
       oldStoragePath = data?['storagePath'] as String?;
+      rootPhotoId = (data?['rootPhotoId'] as String?) ??
+          (data?['originalPhotoId'] as String?); // 호환
     } catch (_) {}
 
     await ref.update({
@@ -971,9 +1029,11 @@ class SharedAlbumService {
       'editingStartedAt': null,
       'updatedAt': FieldValue.serverTimestamp(),
 
-      'lastCommitUid': editorUid,                    // [추가]
-      'lastCommitAt': FieldValue.serverTimestamp(),  // [추가]
-      if (saveToken != null) 'saveToken': saveToken, // [추가]
+      'lastCommitUid': editorUid,
+      'lastCommitAt': FieldValue.serverTimestamp(),
+      if (saveToken != null) 'saveToken': saveToken,
+
+      if (rootPhotoId != null) 'rootPhotoId': rootPhotoId, // [추가][root]
     });
 
     await _albumDoc(albumId)
@@ -1102,7 +1162,7 @@ class Photo {
 
 class EditingInfo {
   final String albumId;
-  final String? photoId;
+  final String? photoId;          // [의미] rootPhotoId로 고정 저장
   final String photoUrl;
   final String? source;
   final String? editedId;
@@ -1134,7 +1194,7 @@ class EditingInfo {
   }) {
     return EditingInfo(
       albumId: albumId,
-      photoId: d['photoId'] as String?,
+      photoId: d['photoId'] as String?, // [중요] rootPhotoId
       photoUrl: (d['photoUrl'] ?? '') as String,
       source: d['source'] as String?,
       editedId: d['editedId'] as String?,
@@ -1156,6 +1216,7 @@ class EditedPhoto {
   final String editorUid;
   final Timestamp? createdAt;
   final Timestamp? updatedAt;
+  final String? rootPhotoId; // [추가][root]
 
   EditedPhoto({
     required this.id,
@@ -1165,6 +1226,7 @@ class EditedPhoto {
     this.originalPhotoId,
     this.createdAt,
     this.updatedAt,
+    this.rootPhotoId,
   });
 
   factory EditedPhoto.fromDoc(String id, Map<String, dynamic> d) {
@@ -1176,6 +1238,7 @@ class EditedPhoto {
       editorUid: (d['editorUid'] ?? '') as String,
       createdAt: d['createdAt'] as Timestamp?,
       updatedAt: d['updatedAt'] as Timestamp?,
+      rootPhotoId: d['rootPhotoId'] as String?, // [추가][root]
     );
   }
 }

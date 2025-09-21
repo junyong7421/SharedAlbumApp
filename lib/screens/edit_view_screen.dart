@@ -77,7 +77,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   bool _isFaceEditMode = false;
 
   // 실시간 키(원본 우선)
-  String? _targetKey;
+  String? _targetKey; // == rootPhotoId
 
   bool _taskLoadedOk = false;
   Uint8List? _editedBytes;
@@ -97,7 +97,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
   // ===== 실시간 OPS =====
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _opsSub;
-  // ★변경: edited 커밋 감시 제거 -> _commitSub 삭제
 
   // 적용/중복 방지 세트 (문서ID + opId 동시 관리)
   final Set<String> _appliedDocIds = {};
@@ -107,7 +106,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   Timestamp? _lastOpTs;
   String? _lastOpDocId;
 
-  // === ★변경: 누적 변환의 "절대 상태" 추가 ===
+  // === 누적 변환의 "절대 상태" ===
   int _rotDeg = 0;          // 0/90/180/270
   bool _flipHState = false; // 좌우 반전
   bool _flipVState = false; // 상하 반전
@@ -120,7 +119,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return _editedBytes ?? _originalBytes!;
   }
 
-  // === ★변경: 정규화 크롭 유틸 (이미지 좌표계 기준)
+  // === 정규화 크롭 유틸 (이미지 좌표계 기준)
   Future<Uint8List> _cropNormalizedBytes(Uint8List src, Rect norm) async {
     final codec = await ui.instantiateImageCodec(src);
     final frame = await codec.getNextFrame();
@@ -144,7 +143,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return byteData!.buffer.asUint8List();
   }
 
-  // === ★변경: 결정적 앵커 렌더 (원본 → 회전 → 반전 → 정규화 크롭)
+  // === 결정적 앵커 렌더 (원본 → 회전 → 반전 → 정규화 크롭)
   Future<Uint8List> _renderBaseForBrightness() async {
     if (_originalBytes == null) await _loadOriginalBytes();
     Uint8List out = _originalBytes!;
@@ -172,8 +171,14 @@ class _EditViewScreenState extends State<EditViewScreen> {
     Uint8List png,
   ) async {
     if (widget.albumId == null) throw StateError('albumId가 없습니다.');
+    // [변경][root] 업로드 폴더 키를 rootPhotoId로 고정
     final photoKey =
-        widget.photoId ?? widget.originalPhotoId ?? widget.editedId ?? _uid;
+        _targetKey ??
+        widget.originalPhotoId ??
+        widget.photoId ??
+        widget.editedId ??
+        _uid;
+
     final storagePath = _svc.generateEditedStoragePath(
       albumId: widget.albumId!,
       photoId: photoKey,
@@ -219,10 +224,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
           storagePath: uploaded.storagePath,
         );
       } else {
+        // [변경][root] saveEditedPhoto는 originalPhotoId가 꼭 필요(서비스에서 강제)
+        if (_targetKey == null) {
+          throw StateError('rootPhotoId를 확인할 수 없습니다.');
+        }
         await _svc.saveEditedPhoto(
           albumId: widget.albumId!,
           url: uploaded.url,
           editorUid: _uid,
+          originalPhotoId: _targetKey!, // ← root를 명시
           storagePath: uploaded.storagePath,
         );
       }
@@ -272,7 +282,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
     try {
       await _svc.sendEditOp(
         albumId: widget.albumId!,
-        photoId: _targetKey!, // 모든 클라 공동 키(원본 ID)
+        // [변경][root] 모든 클라 공동 키(= rootPhotoId)
+        photoId: _targetKey!,
         op: {'type': type, 'data': data, 'by': _uid},
       );
     } catch (_) {}
@@ -287,7 +298,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       case 'commit':
         if (!mounted) return;
         _opsSub?.cancel();
-        // ★변경: _commitSub 사용 제거
         try {
           if (widget.albumId != null && _uid.isNotEmpty) {
             await _svc.endEditing(uid: _uid, albumId: widget.albumId!);
@@ -299,10 +309,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
         return;
 
       case 'brightness': {
-        // ★변경: 결정적 앵커에서 절대값 v를 적용
         final v = (data['value'] as num?)?.toDouble() ?? 0.0;
-        final base = await _renderBaseForBrightness();   // ★변경
-        _brightnessBaseBytes = Uint8List.fromList(base); // ★변경
+        final base = await _renderBaseForBrightness();
+        _brightnessBaseBytes = Uint8List.fromList(base);
         _latestBrightnessValue = v;
         setState(() => _brightness = v);
 
@@ -314,7 +323,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       }
 
       case 'crop': {
-        // 화면 반영(기존 stage 기준)
         if (_lastStageSize == null) return;
         final l = (data['l'] as num).toDouble();
         final t = (data['t'] as num).toDouble();
@@ -334,7 +342,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
         );
         setState(() => _editedBytes = out);
 
-        // ★변경: 절대 상태 갱신 + 밝기 재적용
         _cropNorm = Rect.fromLTRB(l, t, r, b);
         await _reapplyBrightnessIfActive();
         break;
@@ -345,7 +352,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
         final bytesR = await _currentBytes();
         setState(() => _editedBytes = ImageOps.rotate(bytesR, deg));
 
-        // ★변경: 절대 상태 갱신 + 밝기 재적용
         _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
         await _reapplyBrightnessIfActive();
         break;
@@ -360,7 +366,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
               : ImageOps.flipHorizontal(bytesF);
         });
 
-        // ★변경: 절대 상태 갱신 + 밝기 재적용
         if (dir == 'v') {
           _flipVState = !_flipVState;
         } else {
@@ -373,7 +378,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _dirty = true;
   }
 
-  // === ★변경: 변환 후, 밝기 유지 중이면 재적용
+  // 변환 후, 밝기 유지 중이면 재적용
   Future<void> _reapplyBrightnessIfActive() async {
     if (_selectedTool == 2 && _latestBrightnessValue.abs() > 1e-6) {
       final base = await _renderBaseForBrightness();
@@ -455,8 +460,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _opsSub?.cancel();
       _opsSub = q.snapshots(includeMetadataChanges: true).listen(_onOpsSnapshot);
 
-      // ★변경: edited 커밋 감시 제거 -> _watchCommit() 호출 삭제
-
       // 3) 프레임 이후 세션 등록
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _registerSessionOnce();
@@ -529,19 +532,44 @@ class _EditViewScreenState extends State<EditViewScreen> {
     }
   }
 
-  // ★변경: edited 커밋 감시 함수 완전 제거 (_watchCommit 삭제)
+  // ======== 루트 키 계산 ========
+  // [추가][root] editedId로 들어온 경우 originalPhotoId를 읽어서 rootKey를 만든다.
+  Future<String?> _computeRootKey() async {
+    // 1) 원본에서 진입
+    if ((widget.originalPhotoId ?? '').isNotEmpty) {
+      return widget.originalPhotoId;
+    }
+    // 2) 재편집에서 진입: edited/{editedId} 에서 originalPhotoId를 가져온다.
+    if ((widget.editedId ?? '').isNotEmpty && (widget.albumId ?? '').isNotEmpty) {
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection('albums')
+            .doc(widget.albumId!)
+            .collection('edited')
+            .doc(widget.editedId!)
+            .get();
+        final d = snap.data();
+        final opid = d?['originalPhotoId'] as String?;
+        if (opid != null && opid.isNotEmpty) return opid; // == rootPhotoId
+      } catch (_) {}
+    }
+    // 3) fallback: photoId(원본)로 진입했을 수 있음
+    if ((widget.photoId ?? '').isNotEmpty) return widget.photoId;
+
+    return null;
+  }
 
   Future<void> _registerSessionOnce() async {
     if (widget.albumId == null || _uid.isEmpty) return;
     final photoUrl = widget.imagePath ?? '';
-    final photoId = widget.photoId ?? widget.originalPhotoId ?? widget.editedId;
     try {
       await _svc.setEditing(
         uid: _uid,
         albumId: widget.albumId!,
         photoUrl: photoUrl,
-        photoId: photoId,
-        originalPhotoId: widget.originalPhotoId,
+        // [변경][root] 가능하면 루트로 넣기(서비스에서 재보정도 함)
+        photoId: _targetKey,
+        originalPhotoId: _targetKey,
         editedId: widget.editedId,
         userDisplayName: null,
       );
@@ -551,14 +579,17 @@ class _EditViewScreenState extends State<EditViewScreen> {
   @override
   void initState() {
     super.initState();
-    _targetKey = widget.originalPhotoId ?? widget.photoId ?? widget.editedId;
-    _prepareAndSubscribe();
+    // [변경][root] 프레임 이후 비동기로 루트키 계산 → 구독 시작
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final rk = await _computeRootKey();
+      setState(() => _targetKey = rk);   // 항상 rootPhotoId
+      await _prepareAndSubscribe();      // 루트 키 확보 후 실행
+    });
   }
 
   @override
   void dispose() {
     _opsSub?.cancel();
-    // ★변경: _commitSub 제거로 인한 취소 로직 삭제
     if (widget.albumId != null && _uid.isNotEmpty) {
       _svc.endEditing(uid: _uid, albumId: widget.albumId!).catchError((_) {});
     }
@@ -568,24 +599,19 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // 같은 사진 편집 중인 사람이 나뿐인지 확인(마지막 편집자인지)
   Future<bool> _amILastEditor() async {
     if (widget.albumId == null || _targetKey == null) return true;
+    // [변경][root] 루트 키 기준으로만 판단
     final qs = await FirebaseFirestore.instance
         .collection('albums')
         .doc(widget.albumId!)
         .collection('editing_by_user')
         .where('status', isEqualTo: 'active')
+        .where('photoId', isEqualTo: _targetKey)
         .get();
 
-    int count = 0;
-    for (final d in qs.docs) {
-      final m = d.data();
-      final match =
-          (m['originalPhotoId'] == _targetKey) ||
-          (m['photoId'] == _targetKey) ||
-          (m['editedId'] == _targetKey);
-      if (match) count++;
-    }
-    // 0(이상), 1(나 혼자) → 마지막 편집자 취급
-    return count <= 1;
+    // 나 제외하고 0명이면 마지막 편집자
+    final others =
+        qs.docs.where((d) => ((d.data()['uid'] as String?) ?? d.id) != _uid).length;
+    return others == 0;
   }
 
   Future<void> _confirmExit() async {
@@ -1018,7 +1044,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   }
                 } else {
                   if (i == 2) {
-                    // ★변경: 밝기 모드 진입 시 결정적 앵커 생성 (화면은 그대로)
+                    // 밝기 모드 진입 시 결정적 앵커 생성 (화면은 그대로)
                     final base = await _renderBaseForBrightness();
                     _brightnessBaseBytes = Uint8List.fromList(base);
                     _rxBrightnessSession = false;
@@ -1164,7 +1190,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _dirty = true;
     });
 
-    // ★변경: 절대 상태 갱신 + 밝기 재적용
     _cropNorm = Rect.fromLTRB(norm['l']!, norm['t']!, norm['r']!, norm['b']!);
     await _reapplyBrightnessIfActive();
 
@@ -1177,7 +1202,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
     setState(() {});
 
     try {
-      // ★변경: 앵커가 없으면 결정적 앵커 생성
       if (_brightnessBaseBytes == null) {
         final base = await _renderBaseForBrightness();
         _brightnessBaseBytes = Uint8List.fromList(base);
@@ -1213,7 +1237,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _latestBrightnessValue = 0.0;
       _dirty = false;
 
-      // ★변경: 절대 상태 초기화
       _rotDeg = 0;
       _flipHState = false;
       _flipVState = false;
@@ -1228,7 +1251,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _dirty = true;
     });
 
-    // ★변경: 절대 상태 갱신 + 밝기 재적용
     _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
     await _reapplyBrightnessIfActive();
 
@@ -1242,7 +1264,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _dirty = true;
     });
 
-    // ★변경: 절대 상태 갱신 + 밝기 재적용
     _flipHState = !_flipHState;
     await _reapplyBrightnessIfActive();
 
@@ -1256,7 +1277,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _dirty = true;
     });
 
-    // ★변경: 절대 상태 갱신 + 밝기 재적용
     _flipVState = !_flipVState;
     await _reapplyBrightnessIfActive();
 
@@ -1276,31 +1296,33 @@ class _EditViewScreenState extends State<EditViewScreen> {
       );
 
   // 얼굴보정 툴바(기존 그대로)
-  Widget _buildFaceEditToolbar() { return Row(
-    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-    children: [
-      _faceTool(icon: Icons.close, onTap: () {
-        setState(() {
-          _isFaceEditMode = false;
-          _faces468.clear();
-          _faceRects.clear();
-          _selectedFace = null;
-        });
-      }),
-      _faceTool(icon: Icons.center_focus_strong, onTap: () {
-        if (_faceRects.isEmpty) return;
-        int largest = 0; double best = -1;
-        for (int i = 0; i < _faceRects.length; i++) {
-          final r = _faceRects[i]; final area = (r.width * r.height);
-          if (area > best) { best = area; largest = i; }
-        }
-        setState(() => _selectedFace = largest);
-      }),
-      _faceTool(icon: _showLm ? Icons.visibility : Icons.visibility_off,
-          onTap: () => setState(() => _showLm = !_showLm)),
-      _faceTool(icon: Icons.brush, onTap: _openBeautyPanel),
-    ],
-  ); }
+  Widget _buildFaceEditToolbar() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        _faceTool(icon: Icons.close, onTap: () {
+          setState(() {
+            _isFaceEditMode = false;
+            _faces468.clear();
+            _faceRects.clear();
+            _selectedFace = null;
+          });
+        }),
+        _faceTool(icon: Icons.center_focus_strong, onTap: () {
+          if (_faceRects.isEmpty) return;
+          int largest = 0; double best = -1;
+          for (int i = 0; i < _faceRects.length; i++) {
+            final r = _faceRects[i]; final area = (r.width * r.height);
+            if (area > best) { best = area; largest = i; }
+          }
+          setState(() => _selectedFace = largest);
+        }),
+        _faceTool(icon: _showLm ? Icons.visibility : Icons.visibility_off,
+            onTap: () => setState(() => _showLm = !_showLm)),
+        _faceTool(icon: Icons.brush, onTap: _openBeautyPanel),
+      ],
+    );
+  }
 
   Widget _faceTool({required IconData icon, required VoidCallback onTap}) {
     return GestureDetector(
@@ -1357,29 +1379,25 @@ class _EditViewScreenState extends State<EditViewScreen> {
     }
   }
 
-  // 편집자 리스트 배지용 스트림 (기존 로직 유지)
+  // 편집자 리스트 배지용 스트림
   Stream<List<_EditorPresence>> _watchEditorsForTargetRT() {
     if (widget.albumId == null || _targetKey == null) {
       return const Stream<List<_EditorPresence>>.empty();
     }
+    // [변경][root] 루트 키 기준으로만 조회
     final col = FirebaseFirestore.instance
         .collection('albums')
         .doc(widget.albumId!)
         .collection('editing_by_user')
         .where('status', isEqualTo: 'active')
+        .where('photoId', isEqualTo: _targetKey!)
         .orderBy('updatedAt', descending: true)
         .limit(200);
 
     return col.snapshots().map((qs) {
-      final key = _targetKey!;
       final list = <_EditorPresence>[];
       for (final d in qs.docs) {
         final m = d.data();
-        final match =
-            (m['originalPhotoId'] == key) ||
-            (m['photoId'] == key) ||
-            (m['editedId'] == key);
-        if (!match) continue;
         final uid = (m['uid'] as String?) ?? d.id;
         if (uid == _uid && _uid.isNotEmpty) continue;
         final rawName = (m['userDisplayName'] as String?)?.trim();
@@ -1394,9 +1412,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
   }
 
-  // 얼굴 검출(기존 유지)
-  Future<void> _smokeTestLoadTask() async { /* 그대로 */ }
-  Future<void> _runFaceDetect() async { /* 그대로 */ }
+  // 얼굴 검출(필요 시 구현)
+  Future<void> _smokeTestLoadTask() async { /* 그대로/생략 */ }
+  Future<void> _runFaceDetect() async { /* 그대로/생략 */ }
 }
 
 class _EditorPresence {
