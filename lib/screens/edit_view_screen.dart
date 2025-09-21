@@ -52,12 +52,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // === 밝기 동기화 핵심 상태 ===
   double _brightness = 0.0;
   bool _brightnessApplying = false;
-
-  Uint8List? _brightnessBaseBytes;
+  Uint8List? _brightnessBaseBytes; // 밝기 적용 앵커
   bool _rxBrightnessSession = false;
 
-  // [추가] OPS에서 마지막으로 본 밝기 절대값(슬라이더/이미지 통일 기준)
-  double _latestBrightnessValue = 0.0; // [추가]
+  // OPS에서 마지막으로 본 밝기 절대값(슬라이더/이미지 통일 기준)
+  double _latestBrightnessValue = 0.0;
 
   final List<IconData> _toolbarIcons = const [
     Icons.crop,
@@ -96,17 +95,76 @@ class _EditViewScreenState extends State<EditViewScreen> {
   bool _dirty = false;
   bool get _hasUnsavedChanges => _dirty || _cropRectStage != null;
 
-  // 실시간
+  // ===== 실시간 OPS =====
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _opsSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _commitSub;
-  final Set<String> _appliedOpIds = {};
-  Timestamp? _opsAnchor;
+
+  // 적용/중복 방지 세트 (문서ID + opId 동시 관리)
+  final Set<String> _appliedDocIds = {};
+  final Set<String> _seenOpIds = {};
+
+  // 커서(백필 이후 이어받기용): createdAt + docId
+  Timestamp? _lastOpTs;
+  String? _lastOpDocId;
+
+  // === [변경] 누적 변환의 "절대 상태" 추가: 회전/반전/크롭 ===
+  /// ★변경: 결정적 앵커를 위해 누적 변환 절대상태를 보관
+  int _rotDeg = 0;            // 0/90/180/270 누적
+  bool _flipHState = false;   // 좌우 반전 상태
+  bool _flipVState = false;   // 상하 반전 상태
+  Rect? _cropNorm;            // 0~1 정규화 크롭(l,t,r,b)
 
   // ===== 공용 유틸 =====
   Future<Uint8List> _currentBytes() async {
     if (_editedBytes != null) return _editedBytes!;
     if (_originalBytes == null) await _loadOriginalBytes();
     return _editedBytes ?? _originalBytes!;
+  }
+
+  // === [변경] 정규화 크롭 유틸: stage 의존 없이 이미지 좌표계 기준으로 크롭 ===
+  /// ★변경: 결정적 파이프라인을 위해 추가
+  Future<Uint8List> _cropNormalizedBytes(Uint8List src, Rect norm) async {
+    final codec = await ui.instantiateImageCodec(src);
+    final frame = await codec.getNextFrame();
+    final img = frame.image;
+    final int sx = (norm.left * img.width).clamp(0, img.width - 1).round();
+    final int sy = (norm.top * img.height).clamp(0, img.height - 1).round();
+    final int ex = (norm.right * img.width).clamp(1, img.width).round();
+    final int ey = (norm.bottom * img.height).clamp(1, img.height).round();
+    final int cw = (ex - sx).clamp(1, img.width);
+    final int ch = (ey - sy).clamp(1, img.height);
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final dstRect = Rect.fromLTWH(0, 0, cw.toDouble(), ch.toDouble());
+    final srcRect = Rect.fromLTWH(sx.toDouble(), sy.toDouble(), cw.toDouble(), ch.toDouble());
+    final paint = Paint();
+    canvas.drawImageRect(img, srcRect, dstRect, paint);
+    final picture = recorder.endRecording();
+    final cropped = await picture.toImage(cw, ch);
+    final byteData = await cropped.toByteData(format: ui.ImageByteFormat.png);
+    return byteData!.buffer.asUint8List();
+  }
+
+  // === [변경] 결정적 앵커 렌더: 원본 → 회전 → 반전 → (정규화)크롭 ===
+  /// ★변경: 모든 기기에서 동일한 앵커를 만들기 위한 핵심
+  Future<Uint8List> _renderBaseForBrightness() async {
+    if (_originalBytes == null) await _loadOriginalBytes();
+    Uint8List out = _originalBytes!;
+
+    if (_rotDeg % 360 != 0) {
+      out = ImageOps.rotate(out, _rotDeg);
+    }
+    if (_flipHState) {
+      out = ImageOps.flipHorizontal(out);
+    }
+    if (_flipVState) {
+      out = ImageOps.flipVertical(out);
+    }
+    if (_cropNorm != null) {
+      out = await _cropNormalizedBytes(out, _cropNorm!);
+    }
+    return out;
   }
 
   // ===== PNG 캡처/업로드 =====
@@ -193,8 +251,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
           photoId: _targetKey!,
         );
       }
-      _appliedOpIds.clear();
-      _opsAnchor = null;
+      _appliedDocIds.clear();
+      _seenOpIds.clear();
+      _lastOpTs = null;
+      _lastOpDocId = null;
 
       // 세션 종료
       try {
@@ -204,7 +264,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _dirty = false;
       if (!mounted) return;
 
-      // [변경] 저장 후 편집화면 닫을 때, 부모로 edited 결과를 돌려줄 수도 있음(필요 시)
+      // 저장 후 상위로 결과 반환
       Navigator.pop(context, {
         'status': 'saved',
         'editedUrl': uploaded.url,
@@ -230,7 +290,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     } catch (_) {}
   }
 
-  // === 수신 OP 적용(밝기 절대값 동기화 반영) ===
+  // === 수신 OP 적용 ===
   Future<void> _applyIncomingOp(Map<String, dynamic> op) async {
     final type = op['type'] as String? ?? '';
     final data = (op['data'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -238,8 +298,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
     switch (type) {
       case 'commit':
         if (!mounted) return;
-
-        // [변경] 다른 사용자가 저장하면 편집 종료 + 부모로 결과 전달
         _opsSub?.cancel();
         _commitSub?.cancel();
         try {
@@ -249,30 +307,28 @@ class _EditViewScreenState extends State<EditViewScreen> {
         } catch (_) {}
         if (mounted) {
           Navigator.pop(context, {
-            'status': 'peer_saved', // [추가]
+            'status': 'peer_saved',
           });
         }
         return;
 
       case 'brightness': {
+        /// ★변경: 수신 시에도 "결정적 앵커"에서 절대값 v를 적용
         final v = (data['value'] as num?)?.toDouble() ?? 0.0;
+        final base = await _renderBaseForBrightness();   /// ★변경
+        _brightnessBaseBytes = Uint8List.fromList(base); /// ★변경
+        _latestBrightnessValue = v;
+        setState(() => _brightness = v); // 슬라이더 위치 동기화
 
-        // [변경] 항상 원본을 앵커로 삼고 절대값 v를 반영 → 슬라이더/이미지 통일
-        if (_originalBytes == null) {
-          await _loadOriginalBytes();
-        }
-        _brightnessBaseBytes = _originalBytes; // [변경] 수신도 원본 기준
-        _latestBrightnessValue = v;            // [추가] 전역 최신값 업데이트
-
-        setState(() => _brightness = v);       // [변경] 슬라이더 위치를 절대값으로
-        final out = (_brightnessBaseBytes == null || v.abs() < 1e-6)
-            ? _brightnessBaseBytes ?? await _currentBytes()
+        final out = (v.abs() < 1e-6)
+            ? _brightnessBaseBytes!
             : ImageOps.adjustBrightness(_brightnessBaseBytes!, v);
         setState(() => _editedBytes = out);
         break;
       }
 
       case 'crop': {
+        // 기존 stage기준 적용은 유지(화면 갱신)
         if (_lastStageSize == null) return;
         final l = (data['l'] as num).toDouble();
         final t = (data['t'] as num).toDouble();
@@ -291,6 +347,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
           stageSize: _lastStageSize!,
         );
         setState(() => _editedBytes = out);
+
+        /// ★변경: 결정적 상태 갱신 + 밝기 재적용
+        _cropNorm = Rect.fromLTRB(l, t, r, b);                 /// ★변경
+        await _reapplyBrightnessIfActive();                    /// ★변경
         break;
       }
 
@@ -298,6 +358,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
         final deg = (data['deg'] as num?)?.toInt() ?? 0;
         final bytesR = await _currentBytes();
         setState(() => _editedBytes = ImageOps.rotate(bytesR, deg));
+
+        /// ★변경: 결정적 상태 갱신 + 밝기 재적용
+        _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;         /// ★변경
+        await _reapplyBrightnessIfActive();                    /// ★변경
         break;
       }
 
@@ -309,10 +373,30 @@ class _EditViewScreenState extends State<EditViewScreen> {
               ? ImageOps.flipVertical(bytesF)
               : ImageOps.flipHorizontal(bytesF);
         });
+
+        /// ★변경: 결정적 상태 갱신 + 밝기 재적용
+        if (dir == 'v') {                                     /// ★변경
+          _flipVState = !_flipVState;
+        } else {
+          _flipHState = !_flipHState;
+        }
+        await _reapplyBrightnessIfActive();                    /// ★변경
         break;
       }
     }
     _dirty = true;
+  }
+
+  // === [변경] 변환 후 밝기 유지 중이면 재적용 ===
+  /// ★변경: 밝기 툴 활성 & v != 0이면 결정적 앵커 재렌더 후 밝기 재적용
+  Future<void> _reapplyBrightnessIfActive() async {
+    if (_selectedTool == 2 && _latestBrightnessValue.abs() > 1e-6) {
+      final base = await _renderBaseForBrightness();
+      _brightnessBaseBytes = Uint8List.fromList(base);
+      setState(() {
+        _editedBytes = ImageOps.adjustBrightness(base, _latestBrightnessValue);
+      });
+    }
   }
 
   // ===== 백필 + 실시간 구독 + 커밋 감시 =====
@@ -326,41 +410,63 @@ class _EditViewScreenState extends State<EditViewScreen> {
           .doc(widget.albumId!)
           .collection('ops');
 
-      // 1) 백필
+      // 1) 백필 (createdAt ASC, docId ASC)
       final backfill = await opsCol
           .where('photoId', isEqualTo: _targetKey)
           .orderBy('createdAt', descending: false)
-          .limit(500)
+          .orderBy(FieldPath.documentId, descending: false)
+          .limit(1000)
           .get();
 
       for (final d in backfill.docs) {
         final data = d.data();
-        final op = (data['op'] as Map?)?.cast<String, dynamic>() ??
+
+        // op 추출(서버가 op 필드에 래핑 저장)
+        final opMap = (data['op'] as Map?)?.cast<String, dynamic>();
+        final op = opMap ??
             <String, dynamic>{
               'type': data['type'],
               'data': data['data'],
               'by': data['by'],
             };
-        _appliedOpIds.add(d.id);
+
+        // 중복 체크: 문서ID + opId
+        final docId = d.id;
+        final opId = (op['opId'] as String?) ??
+            ((op['editorUid'] != null) ? '${op['editorUid']}_${data['createdAt'] ?? ''}_$docId' : null);
+
+        if (_appliedDocIds.contains(docId)) continue;
+        if (opId != null && _seenOpIds.contains(opId)) continue;
+
+        _appliedDocIds.add(docId);
+        if (opId != null) _seenOpIds.add(opId);
+
         await _applyIncomingOp(op);
 
+        // 커서 갱신
         final ts = data['createdAt'];
         if (ts is Timestamp) {
-          _opsAnchor =
-              (_opsAnchor == null || ts.compareTo(_opsAnchor!) > 0) ? ts : _opsAnchor;
+          if (_lastOpTs == null ||
+              ts.millisecondsSinceEpoch > _lastOpTs!.millisecondsSinceEpoch ||
+              (ts == _lastOpTs && (docId.compareTo(_lastOpDocId ?? '') > 0))) {
+            _lastOpTs = ts;
+            _lastOpDocId = docId;
+          }
         }
       }
 
-      // 2) 실시간
+      // 2) 실시간 (커서 이후만, 정렬 동일)
       Query<Map<String, dynamic>> q = opsCol
           .where('photoId', isEqualTo: _targetKey)
-          .orderBy('createdAt', descending: false);
-      if (_opsAnchor != null) {
-        q = q.startAfter([_opsAnchor]);
+          .orderBy('createdAt', descending: false)
+          .orderBy(FieldPath.documentId, descending: false);
+
+      if (_lastOpTs != null && _lastOpDocId != null) {
+        q = q.startAfter([_lastOpTs, _lastOpDocId]);
       }
 
       _opsSub?.cancel();
-      _opsSub = q.snapshots().listen(_onOpsSnapshot);
+      _opsSub = q.snapshots(includeMetadataChanges: true).listen(_onOpsSnapshot);
 
       // 3) 커밋 감시 (edited)
       _watchCommit();
@@ -382,29 +488,57 @@ class _EditViewScreenState extends State<EditViewScreen> {
       final m = ch.doc.data();
       if (m == null) continue;
 
-      final opId = ch.doc.id;
-      if (_appliedOpIds.contains(opId)) continue;
+      final docId = ch.doc.id;
+      if (_appliedDocIds.contains(docId)) continue;
 
-      // 내가 보낸 건 적용 생략(기록만)
-      if (_uid.isNotEmpty && (m['by'] as String?) == _uid) {
-        _appliedOpIds.add(opId);
-        continue;
-      }
-
-      final op = (m['op'] as Map?)?.cast<String, dynamic>() ??
+      // op 래핑 추출
+      final opMap = (m['op'] as Map?)?.cast<String, dynamic>();
+      final op = opMap ??
           <String, dynamic>{
             'type': m['type'],
             'data': m['data'],
             'by': m['by'],
           };
 
-      _appliedOpIds.add(opId);
+      // 내가 보낸 건 스킵(op.editorUid/by 확인)
+      final sender = (op['editorUid'] as String?) ?? (op['by'] as String?);
+      if (_uid.isNotEmpty && sender == _uid) {
+        _appliedDocIds.add(docId);
+        // 커서만 갱신
+        final tsMine = m['createdAt'];
+        if (tsMine is Timestamp) {
+          if (_lastOpTs == null ||
+              tsMine.millisecondsSinceEpoch > _lastOpTs!.millisecondsSinceEpoch ||
+              (tsMine == _lastOpTs && (docId.compareTo(_lastOpDocId ?? '') > 0))) {
+            _lastOpTs = tsMine;
+            _lastOpDocId = docId;
+          }
+        }
+        continue;
+      }
+
+      // opId 중복 방지
+      final opId = (op['opId'] as String?) ??
+          ((sender != null) ? '${sender}_${m['createdAt'] ?? ''}_$docId' : null);
+      if (opId != null && _seenOpIds.contains(opId)) {
+        _appliedDocIds.add(docId);
+        continue;
+      }
+
+      _appliedDocIds.add(docId);
+      if (opId != null) _seenOpIds.add(opId);
+
       _applyIncomingOp(op);
 
+      // 커서 갱신
       final ts = m['createdAt'];
       if (ts is Timestamp) {
-        _opsAnchor =
-            (_opsAnchor == null || ts.compareTo(_opsAnchor!) > 0) ? ts : _opsAnchor;
+        if (_lastOpTs == null ||
+            ts.millisecondsSinceEpoch > _lastOpTs!.millisecondsSinceEpoch ||
+            (ts == _lastOpTs && (docId.compareTo(_lastOpDocId ?? '') > 0))) {
+          _lastOpTs = ts;
+          _lastOpDocId = docId;
+        }
       }
     }
   }
@@ -422,13 +556,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
         .limit(1);
 
     _commitSub?.cancel();
-    _commitSub = q.snapshots().listen((qs) async {
+    _commitSub = q.snapshots(includeMetadataChanges: true).listen((qs) async {
       if (qs.docs.isEmpty) return;
       final doc = qs.docs.first;
       final data = doc.data();
       final by = (data['editorUid'] ?? data['editedBy'] ?? data['by']) as String?;
       if (by != null && by != _uid) {
-        // [변경] 누군가 저장하면 내 편집 화면 닫고 부모에 editedId/url 전달
         if (!mounted) return;
         try {
           if (widget.albumId != null && _uid.isNotEmpty) {
@@ -438,8 +571,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
         if (!mounted) return;
         Navigator.pop(context, {
           'status': 'peer_saved',
-          'editedId': doc.id,           // [추가]
-          'editedUrl': data['url'],     // [추가]
+          'editedId': doc.id,
+          'editedUrl': data['url'],
         });
       }
     });
@@ -479,8 +612,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
     super.dispose();
   }
 
-  // [추가] 같은 사진 편집 중인 사람이 나뿐인지 확인(마지막 편집자인지)
-  Future<bool> _amILastEditor() async { // [추가]
+  // 같은 사진 편집 중인 사람이 나뿐인지 확인(마지막 편집자인지)
+  Future<bool> _amILastEditor() async {
     if (widget.albumId == null || _targetKey == null) return true;
     final qs = await FirebaseFirestore.instance
         .collection('albums')
@@ -498,7 +631,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
           (m['editedId'] == _targetKey);
       if (match) count++;
     }
-    // count == 0(이상), 1(나 혼자) → 마지막 편집자 취급
+    // 0(이상), 1(나 혼자) → 마지막 편집자 취급
     return count <= 1;
   }
 
@@ -511,8 +644,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
       }
     }
 
-    // [변경] 내가 마지막 편집자인지 먼저 판단
-    final last = await _amILastEditor(); // [추가]
+    // 내가 마지막 편집자인지 먼저 판단
+    final last = await _amILastEditor();
 
     if (!_hasUnsavedChanges) {
       await _endSession();
@@ -526,8 +659,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return;
     }
 
-    // [변경] 마지막 편집자가 아니면 팝업 없이 그냥 종료
-    if (!last) { // [추가]
+    // 마지막 편집자가 아니면 팝업 없이 종료
+    if (!last) {
       await _endSession();
       if (mounted) Navigator.pop(context, {'status': 'discard_without_prompt'});
       return;
@@ -932,14 +1065,13 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   }
                 } else {
                   if (i == 2) {
-                    // [변경] 밝기 모드 진입 시: 항상 원본을 앵커로, 슬라이더는 최신 절대값으로
-                    if (_originalBytes == null) {
-                      await _loadOriginalBytes();
-                    }
-                    _brightnessBaseBytes = _originalBytes; // [변경]
+                    // === [변경] 밝기 모드 진입: "결정적 앵커"를 만든다 (화면은 그대로)
+                    /// ★변경: _currentBytes() 대신 결정적 파이프라인 기준
+                    final base = await _renderBaseForBrightness();      /// ★변경
+                    _brightnessBaseBytes = Uint8List.fromList(base);     /// ★변경
                     _rxBrightnessSession = false;
                     setState(() {
-                      _brightness = _latestBrightnessValue; // [추가]
+                      _brightness = _latestBrightnessValue;              /// ★변경
                     });
                   }
                   setState(() {
@@ -1078,6 +1210,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _dirty = true;
     });
 
+    /// ★변경: 누적 상태 갱신 + 밝기 재적용
+    _cropNorm = Rect.fromLTRB(norm['l']!, norm['t']!, norm['r']!, norm['b']!);  /// ★변경
+    await _reapplyBrightnessIfActive();                                          /// ★변경
+
     await _sendOp('crop', norm);
   }
 
@@ -1087,18 +1223,22 @@ class _EditViewScreenState extends State<EditViewScreen> {
     setState(() {});
 
     try {
-      // [변경] 발신자도 항상 원본(anchor) 기준으로 절대값 적용
-      if (_originalBytes == null) {
-        await _loadOriginalBytes();
+      /// ★변경: 앵커가 없으면 "결정적 앵커" 생성
+      if (_brightnessBaseBytes == null) {                                       /// ★변경
+        final base = await _renderBaseForBrightness();                           /// ★변경
+        _brightnessBaseBytes = Uint8List.fromList(base);                         /// ★변경
       }
-      _brightnessBaseBytes = _originalBytes;                 // [변경]
-      _latestBrightnessValue = _brightness;                  // [추가] 글로벌 최신값
-      final base = _brightnessBaseBytes!;
+
+      _latestBrightnessValue = _brightness;
+
       final out = (_brightness.abs() < 1e-6)
-          ? base
-          : ImageOps.adjustBrightness(base, _brightness);
-      setState(() => _editedBytes = out);
-      _dirty = true;
+          ? _brightnessBaseBytes!
+          : ImageOps.adjustBrightness(_brightnessBaseBytes!, _brightness);
+
+      setState(() {
+        _editedBytes = out;
+        _dirty = true;
+      });
 
       await _sendOp('brightness', {'value': _brightness});
     } finally {
@@ -1116,8 +1256,14 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _brightnessBaseBytes = null;
       _rxBrightnessSession = false;
       _beautyBasePng = null;
-      _latestBrightnessValue = 0.0; // [추가]
+      _latestBrightnessValue = 0.0;
       _dirty = false;
+
+      /// ★변경: 결정적 상태도 초기화
+      _rotDeg = 0;                /// ★변경
+      _flipHState = false;        /// ★변경
+      _flipVState = false;        /// ★변경
+      _cropNorm = null;           /// ★변경
     });
   }
 
@@ -1127,6 +1273,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _editedBytes = ImageOps.rotate(bytes, deg);
       _dirty = true;
     });
+
+    /// ★변경: 누적 상태 갱신 + 밝기 재적용
+    _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;                               /// ★변경
+    await _reapplyBrightnessIfActive();                                          /// ★변경
+
     await _sendOp('rotate', {'deg': deg});
   }
 
@@ -1136,6 +1287,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _editedBytes = ImageOps.flipHorizontal(bytes);
       _dirty = true;
     });
+
+    /// ★변경: 누적 상태 갱신 + 밝기 재적용
+    _flipHState = !_flipHState;                                                  /// ★변경
+    await _reapplyBrightnessIfActive();                                          /// ★변경
+
     await _sendOp('flip', {'dir': 'h'});
   }
 
@@ -1145,6 +1301,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _editedBytes = ImageOps.flipVertical(bytes);
       _dirty = true;
     });
+
+    /// ★변경: 누적 상태 갱신 + 밝기 재적용
+    _flipVState = !_flipVState;                                                  /// ★변경
+    await _reapplyBrightnessIfActive();                                          /// ★변경
+
     await _sendOp('flip', {'dir': 'v'});
   }
 
@@ -1161,7 +1322,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
       );
 
   // 얼굴보정 툴바(기존 그대로)
-  Widget _buildFaceEditToolbar() { /* 기존 구현 유지 */ return Row(
+  Widget _buildFaceEditToolbar() { return Row(
     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
     children: [
       _faceTool(icon: Icons.close, onTap: () {
@@ -1197,7 +1358,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     );
   }
 
-  Future<void> _openBeautyPanel() async { /* 기존 구현 유지 */ 
+  Future<void> _openBeautyPanel() async {
     if (_selectedFace == null) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('얼굴을 먼저 선택하세요.')));

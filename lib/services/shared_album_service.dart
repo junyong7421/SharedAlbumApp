@@ -91,13 +91,23 @@ class SharedAlbumService {
   }) async {
     await _ensureReady();
 
+    // [추가] op 메타 보강: 중복 방지/추적용
+    final uid = FirebaseAuth.instance.currentUser!.uid;
+    final opId = '${uid}_${DateTime.now().microsecondsSinceEpoch}_${_rand()}';
+    final enriched = {
+      'opId': opId,         // [추가]
+      'editorUid': uid,     // [추가]
+      ...op,
+    };
+
     final callable = _functions.httpsCallable(
       'enqueueOp',
       options: HttpsCallableOptions(timeout: const Duration(seconds: 10)),
     );
 
     Future<void> _call() async {
-      await callable.call({'albumId': albumId, 'photoId': photoId, 'op': op});
+      // [변경] op에 opId/editorUid 포함시켜 전송
+      await callable.call({'albumId': albumId, 'photoId': photoId, 'op': enriched});
     }
 
     try {
@@ -131,7 +141,8 @@ class SharedAlbumService {
         .orderBy('createdAt', descending: false) // 시간순 정렬
         .orderBy(FieldPath.documentId); // 동시간 충돌 방지
 
-    return q.snapshots().map(
+    // [변경] 메타데이터 변경 포함(오프라인→온라인 재동기화 대응)
+    return q.snapshots(includeMetadataChanges: true).map(
       (qs) => qs.docs
           .map((d) => {
                 'id': d.id, // 클라 dedupe에 유용
@@ -256,7 +267,8 @@ class SharedAlbumService {
         .orderBy('createdAt', descending: false)
         .orderBy(FieldPath.documentId, descending: false);
 
-    return q.snapshots().map((qs) {
+    // [변경] 메타데이터 변경 포함(오프라인→온라인 재동기화 대응)
+    return q.snapshots(includeMetadataChanges: true).map((qs) {
       final List<Map<String, dynamic>> added = [];
 
       for (final c in qs.docChanges) {
@@ -630,7 +642,23 @@ class SharedAlbumService {
     required String uid,
     required String albumId,
   }) async {
+    // [변경] 삭제 전 photoId 추출 → 마지막 편집자일 때 ops 정리 위해 필요
+    String? photoId;
+    try {
+      final snap = await _editingByUserDoc(albumId, uid).get();
+      final data = snap.data();
+      photoId = (data?['photoId'] as String?) ??
+          (data?['originalPhotoId'] as String?);
+    } catch (_) {}
+
     await _editingByUserDoc(albumId, uid).delete();
+
+    // [추가] 마지막 편집자면 ops 정리
+    if (photoId != null && photoId.isNotEmpty) {
+      try {
+        await tryCleanupOpsIfNoEditors(albumId: albumId, photoId: photoId);
+      } catch (_) {}
+    }
   }
 
   Future<void> clearEditingByUrl({
