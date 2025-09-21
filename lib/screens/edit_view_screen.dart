@@ -178,7 +178,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return (url: url, storagePath: storagePath);
   }
 
-  // 저장 처리: 항상 캡처→업로드→문서 갱신
+  // edit_view_screen.dart
   Future<void> _onSave() async {
     if (widget.albumId == null) {
       if (mounted) {
@@ -202,14 +202,25 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _isSaving = true;
 
     try {
-      // 1) 현재 편집 화면 캡처
-      final png = await _exportEditedImageBytes(hideOverlay: true);
-      // 2) edited/* 경로로 업로드
+      // ✅ 스테이지 캡처 대신 편집 결과(없으면 원본) 바이트 저장
+      final raw = await _currentBytes();
+
+      // PNG로 통일하여 업로드
+      Uint8List _asPng(Uint8List b) {
+        final im = img.decodeImage(b);
+        if (im == null) {
+          throw StateError('이미지를 디코드할 수 없습니다.');
+        }
+        return Uint8List.fromList(img.encodePng(im));
+      }
+
+      final png = _asPng(raw);
+
+      // 업로드
       final uploaded = await _uploadEditedPngBytes(png);
 
-      // 3) 저장 분기
+      // 문서 갱신 분기
       if ((widget.editedId ?? '').isNotEmpty) {
-        // 편집본 재편집 → 덮어쓰기 + 이전 파일 정리
         await _svc.saveEditedPhotoOverwrite(
           albumId: widget.albumId!,
           editedId: widget.editedId!,
@@ -219,7 +230,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
           deleteOld: true,
         );
       } else if ((widget.originalPhotoId ?? '').isNotEmpty) {
-        // 원본에서 신규 편집본 생성(원본 추적)
         await _svc.saveEditedPhotoFromUrl(
           albumId: widget.albumId!,
           editorUid: _uid,
@@ -228,7 +238,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
           storagePath: uploaded.storagePath,
         );
       } else {
-        // 예외/호환: 원본 id 없으면 최소 저장
         await _svc.saveEditedPhoto(
           albumId: widget.albumId!,
           url: uploaded.url,
@@ -237,12 +246,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
         );
       }
 
-      // 4) 저장 성공 시에만 내 세션 정리
+      // 세션 정리
       try {
         await _svc.clearEditing(
           uid: _uid,
           albumId: widget.albumId!,
-          editedId: widget.editedId, // 재편집이면 락 해제 포함
+          editedId: widget.editedId,
         );
       } catch (_) {}
 
@@ -1012,6 +1021,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   // 추후 슬라이더(피부/눈/코/입술) 넣을 자리
+  // edit_view_screen.dart
   Future<void> _openBeautyPanel() async {
     if (_selectedFace == null) {
       ScaffoldMessenger.of(
@@ -1020,16 +1030,25 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return;
     }
 
-    // ① 오버레이 숨기고 캡처(겹그림 방지)
-    setState(() => _faceOverlayOn = false);
-    await Future.delayed(const Duration(milliseconds: 16));
-    _beautyBasePng = await _exportEditedImageBytes(pixelRatio: 1.0);
-    setState(() => _faceOverlayOn = true);
+    // 🔁 스테이지 캡처 대신 원본/편집본 바이트 사용
+    final base = await _currentBytes(); // _editedBytes ?? _originalBytes
+    // PNG 보장 (저장/편집 파이프라인 통일)
+    Uint8List _ensurePng(Uint8List b) {
+      final im = img.decodeImage(b);
+      return Uint8List.fromList(img.encodePng(im!));
+    }
 
-    final Size stageSize = _captureKey.currentContext!.size!;
+    _beautyBasePng = _ensurePng(base);
+
+    // 실제 이미지 크기
+    final imInfo = img.decodeImage(_beautyBasePng!)!;
+    final Size imgSize = Size(
+      imInfo.width.toDouble(),
+      imInfo.height.toDouble(),
+    );
+
     final init = _faceParams[_selectedFace!] ?? BeautyParams();
 
-    // ② 패널 띄우기
     final result =
         await showModalBottomSheet<({Uint8List image, BeautyParams params})>(
           context: context,
@@ -1039,24 +1058,19 @@ class _EditViewScreenState extends State<EditViewScreen> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
           ),
           builder: (_) => BeautyPanel(
-            srcPng: _beautyBasePng!, // 스테이지 크기 기준 PNG
+            srcPng: _beautyBasePng!, // ✅ 원본 해상도
             faces468: _faces468,
             selectedFace: _selectedFace!,
-            imageSize: stageSize,
-            initialParams: init, // 얼굴별로 저장된 값 있으면 적용
+            imageSize: imgSize, // ✅ 실제 이미지 크기
+            initialParams: init,
           ),
         );
 
-    // ③ 적용 결과 수신 → Undo 스택에 "이전 상태" 저장하고 반영
     if (result != null && mounted) {
       final prev = await _currentBytes();
       final paramsCopy = _cloneParams(_faceParams);
-
       setState(() {
-        _faceUndo.add((
-          image: Uint8List.fromList(prev),
-          params: paramsCopy,
-        )); // 한 번만!
+        _faceUndo.add((image: Uint8List.fromList(prev), params: paramsCopy));
         _editedBytes = result.image;
         _faceParams[_selectedFace!] = result.params;
       });

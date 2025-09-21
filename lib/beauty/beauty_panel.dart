@@ -1,15 +1,15 @@
+// lib/beauty/beauty_panel.dart
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'beauty_controller.dart';
 
 class BeautyPanel extends StatefulWidget {
-  final Uint8List srcPng; // 기준 PNG (누적 방지)
+  final Uint8List srcPng;
   final List<List<Offset>> faces468;
   final int selectedFace;
   final Size imageSize;
-
-  final BeautyParams? initialParams; // 이전 값 유지
+  final BeautyParams? initialParams;
 
   const BeautyPanel({
     super.key,
@@ -26,12 +26,14 @@ class BeautyPanel extends StatefulWidget {
 
 class _BeautyPanelState extends State<BeautyPanel> {
   late BeautyParams _params;
+  late final BeautyParams _baseline; // 패널 오픈 당시 값(눈금/Δ 기준)
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
     _params = (widget.initialParams ?? BeautyParams()).copyWith();
+    _baseline = (widget.initialParams ?? BeautyParams()).copyWith();
   }
 
   @override
@@ -63,43 +65,42 @@ class _BeautyPanelState extends State<BeautyPanel> {
               ],
             ),
 
-            _slider01(
-              '피부 부드럽게',
-              _params.skinStrength,
-              (v) => setState(() => _params.skinStrength = v),
+            // -1~1 (중앙 0 눈금)
+            _sliderSigned(
+              '피부 톤업',
+              _params.skinTone,
+              (v) => setState(() => _params.skinTone = v),
             ),
-            _slider01(
-              '눈 확대',
-              _params.eyeAmount,
-              (v) => setState(() => _params.eyeAmount = v),
+            _sliderSigned(
+              '눈 뒤트임',
+              _params.eyeTail,
+              (v) => setState(() => _params.eyeTail = v),
             ),
-            _slider01(
+
+            // 0~1 슬라이더 + “기준 눈금” (패널 입장 당시 값 위치에 얇은 라인)
+            _slider01WithTick(
               '입술 채도',
               _params.lipSatGain,
+              _baseline.lipSatGain,
               (v) => setState(() => _params.lipSatGain = v),
             ),
-            _sliderLipHue(
+            _sliderHueWithZeroTick(
               '립 색상',
               _params.hueShift,
               (deg) => setState(() => _params.hueShift = deg),
             ),
-            _slider01(
+            _slider01WithTick(
               '립 강도',
               _params.lipIntensity,
+              _baseline.lipIntensity,
               (v) => setState(() => _params.lipIntensity = v),
             ),
 
             const Divider(height: 24),
-
             _sliderSigned(
               '코 크기',
               _params.noseAmount,
               (v) => setState(() => _params.noseAmount = v),
-            ),
-            _sliderSigned(
-              '얼굴 크기',
-              _params.faceAmount,
-              (v) => setState(() => _params.faceAmount = v),
             ),
 
             const SizedBox(height: 8),
@@ -116,60 +117,149 @@ class _BeautyPanelState extends State<BeautyPanel> {
     );
   }
 
-  // 0~1 슬라이더
-  Widget _slider01(String label, double value, ValueChanged<double> onChanged) {
-    return Row(
-      children: [
-        SizedBox(width: 90, child: Text(label)),
-        Expanded(
-          child: Slider(
-            min: 0,
-            max: 1,
-            value: value.clamp(0.0, 1.0),
-            onChanged: (v) => onChanged(v.clamp(0.0, 1.0)),
-          ),
-        ),
-      ],
-    );
-  }
+  // 중앙 0 눈금 (-1~1)
+  // lib/beauty/beauty_panel.dart 중
 
-  // 각도 0~360° (내부 0~1 매핑)
-  // 기존 _sliderDeg(...) 대신 아래로 교체
-  Widget _sliderLipHue(
-    String label,
-    double deg,
-    ValueChanged<double> onChangedDeg,
-  ) {
-    const double minDeg = -40.0; // 레드에서 -40° (코럴/오렌지 쪽)
-    const double maxDeg = 40.0; // 레드에서 +40° (핑크/플럼 쪽)
-    final uiValue = ((deg - minDeg) / (maxDeg - minDeg)).clamp(0.0, 1.0);
-
-    return Row(
-      children: [
-        SizedBox(width: 90, child: Text(label)),
-        Expanded(
-          child: Slider(
-            min: 0,
-            max: 1,
-            value: uiValue,
-            onChanged: (v) => onChangedDeg(minDeg + v * (maxDeg - minDeg)),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // -1 ~ +1 (중앙 0)
+  // 중앙 0 눈금(-1~1) + 값 표시
   Widget _sliderSigned(String label, double v, ValueChanged<double> onChanged) {
     return Row(
       children: [
         SizedBox(width: 90, child: Text(label)),
         Expanded(
-          child: Slider(
-            min: -1,
-            max: 1,
-            value: v.clamp(-1.0, 1.0),
-            onChanged: (nv) => onChanged(nv.clamp(-1.0, 1.0)),
+          child: SizedBox(
+            height: 36,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                IgnorePointer(
+                  child: Container(width: 2, height: 14, color: Colors.black26),
+                ),
+                Slider(
+                  min: -1,
+                  max: 1,
+                  value: v.clamp(-1.0, 1.0),
+                  onChanged: (nv) => onChanged(nv.clamp(-1.0, 1.0)),
+                ),
+              ],
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 54,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              v.toStringAsFixed(2),
+              style: const TextStyle(
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 0~1 + 기준 눈금(초기값 위치) + 값 표시
+  Widget _slider01WithTick(
+    String label,
+    double value,
+    double tickAt,
+    ValueChanged<double> onChanged,
+  ) {
+    return Row(
+      children: [
+        SizedBox(width: 90, child: Text(label)),
+        Expanded(
+          child: SizedBox(
+            height: 36,
+            child: Stack(
+              children: [
+                Align(
+                  alignment: Alignment((tickAt * 2) - 1, 0),
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 2,
+                      height: 14,
+                      color: Colors.black26,
+                    ),
+                  ),
+                ),
+                Slider(
+                  min: 0,
+                  max: 1,
+                  value: value.clamp(0.0, 1.0),
+                  onChanged: (v) => onChanged(v.clamp(0.0, 1.0)),
+                ),
+              ],
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 54,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              value.toStringAsFixed(2),
+              style: const TextStyle(
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // -40°~+40° + 중앙(0°) 눈금 + 값 표시
+  Widget _sliderHueWithZeroTick(
+    String label,
+    double deg,
+    ValueChanged<double> onChangedDeg,
+  ) {
+    const minDeg = -40.0, maxDeg = 40.0;
+    final uiValue = ((deg - minDeg) / (maxDeg - minDeg)).clamp(0.0, 1.0);
+    final zeroPos = ((0 - minDeg) / (maxDeg - minDeg)).clamp(0.0, 1.0);
+
+    return Row(
+      children: [
+        SizedBox(width: 90, child: Text(label)),
+        Expanded(
+          child: SizedBox(
+            height: 36,
+            child: Stack(
+              children: [
+                Align(
+                  alignment: Alignment(zeroPos * 2 - 1, 0),
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 2,
+                      height: 14,
+                      color: Colors.black26,
+                    ),
+                  ),
+                ),
+                Slider(
+                  min: 0,
+                  max: 1,
+                  value: uiValue,
+                  onChanged: (v) =>
+                      onChangedDeg(minDeg + v * (maxDeg - minDeg)),
+                ),
+              ],
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 54,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Text(
+              '${deg.toStringAsFixed(0)}°',
+              style: const TextStyle(
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
           ),
         ),
       ],
@@ -181,11 +271,12 @@ class _BeautyPanelState extends State<BeautyPanel> {
     try {
       final ctrl = BeautyController();
       final out = await ctrl.applyAll(
-        srcPng: widget.srcPng, // 항상 기준 PNG에서 시작(누적 방지)
+        srcPng: widget.srcPng, // 패널 진입 시 스냅샷(누적 방지)
         faces468: widget.faces468,
         selectedFace: widget.selectedFace,
         imageSize: widget.imageSize,
         params: _params,
+        prevParams: _baseline, // ❗ Δ 기준(중복 적용 방지)
       );
       if (mounted) Navigator.pop(context, (image: out, params: _params));
     } finally {
