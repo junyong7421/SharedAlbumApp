@@ -81,8 +81,19 @@ Future<Uint8List> _apply(_Job j) async {
       .toList();
 
   // 2) 입술/피부 마스크
-  final lipPath = polyPathFrom(ptsImg, lipsOuter);
+  // 2) 입술/피부 마스크  ⬅️ 기존 블록 통째로 교체
+  final lipOuter = polyPathFrom(ptsImg, lipsOuter);
+  final lipInner = polyPathFrom(ptsImg, lipsInner);
 
+  // 립 = 바깥 윤곽 - 안쪽(입구멍) → 치아/입안 제외
+  final lipPath = Path.combine(PathOperation.difference, lipOuter, lipInner);
+
+  // 마스크를 살짝 두껍게(팽창) + 가장자리만 부드럽게
+  var lipMask = await rasterizeMask(j.imageSize, lipPath, feather: 1.5);
+  lipMask = dilateAlpha(lipMask, width, height, 2); // 두께 키우기
+  lipMask = blurAlpha(lipMask, width, height, 1); // 소프트하게
+
+  // 피부 = 얼굴 박스 - 립
   double minX = width.toDouble(), minY = height.toDouble(), maxX = 0, maxY = 0;
   for (final p in ptsImg) {
     if (p.dx < minX) minX = p.dx;
@@ -102,8 +113,6 @@ Future<Uint8List> _apply(_Job j) async {
     faceRectPath,
     lipPath,
   );
-
-  final lipMask = await rasterizeMask(j.imageSize, lipPath, feather: 2);
   final skinMask = await rasterizeMask(j.imageSize, lipPathInv, feather: 4);
 
   // 3) 편의 포인트들

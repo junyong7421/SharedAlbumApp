@@ -254,7 +254,7 @@ Future<Uint8List> tintLips({
   required int width,
   required int height,
   double satGain = 0.2,
-  double hueShiftDeg = 0.0,
+  double hueShiftDeg = 0.0, // 이제: 레드 주변 ±40°만 사용
   double intensity = 0.6,
 }) async {
   final src = img.decodeImage(bytes);
@@ -262,6 +262,9 @@ Future<Uint8List> tintLips({
 
   final out = src.clone();
   int idx = 0;
+
+  // 레드 축(350° 근처) 기준으로 ±40° 이동
+  final targetHue = ((350.0 + hueShiftDeg).clamp(0.0, 360.0)) / 360.0;
 
   for (int y = 0; y < height; y++) {
     for (int x = 0; x < width; x++, idx++) {
@@ -274,14 +277,17 @@ Future<Uint8List> tintLips({
       final hsl = _rgbToHsl(r, g, b);
       double h = hsl[0], s = hsl[1], l = hsl[2];
 
+      // 채도는 살짝 올리고,
       s = (s * (1.0 + satGain)).clamp(0.0, 1.0);
-      h = (h + hueShiftDeg / 360.0) % 1.0;
+      // 색상은 "현재 → 타깃 레드" 쪽으로 강하게 보간
+      h = _lerpHue(h, targetHue, 0.85);
 
       final rgb = _hslToRgb(h, s, l);
       final rr = (rgb[0] * 255).round();
       final gg = (rgb[1] * 255).round();
       final bb = (rgb[2] * 255).round();
 
+      // 블렌딩
       final a = (mask * intensity).clamp(0.0, 1.0);
       final fr = ((1 - a) * p.r + a * rr).round();
       final fg = ((1 - a) * p.g + a * gg).round();
@@ -335,4 +341,66 @@ List<double> _hslToRgb(double h, double s, double l) {
     b = _hue2rgb(p, q, h - 1 / 3);
   }
   return [r, g, b];
+}
+
+// 알파 팽창(외곽 두껍게)
+// 마스크를 두껍게(팽창)
+Uint8List dilateAlpha(Uint8List a, int w, int h, int radius) {
+  if (radius <= 0) return a;
+  var out = Uint8List.fromList(a);
+  for (int r = 0; r < radius; r++) {
+    final src = Uint8List.fromList(out);
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int maxv = 0;
+        for (int yy = y - 1; yy <= y + 1; yy++) {
+          if (yy < 0 || yy >= h) continue;
+          final row = yy * w;
+          for (int xx = x - 1; xx <= x + 1; xx++) {
+            if (xx < 0 || xx >= w) continue;
+            final v = src[row + xx];
+            if (v > maxv) maxv = v;
+          }
+        }
+        out[y * w + x] = maxv;
+      }
+    }
+  }
+  return out;
+}
+
+// 소프트하게(박스 블러 한두 번)
+Uint8List blurAlpha(Uint8List a, int w, int h, int radius) {
+  if (radius <= 0) return a;
+  var out = Uint8List.fromList(a);
+  for (int r = 0; r < radius; r++) {
+    final src = Uint8List.fromList(out);
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        int sum = 0, cnt = 0;
+        for (int yy = y - 1; yy <= y + 1; yy++) {
+          if (yy < 0 || yy >= h) continue;
+          final row = yy * w;
+          for (int xx = x - 1; xx <= x + 1; xx++) {
+            if (xx < 0 || xx >= w) continue;
+            sum += src[row + xx];
+            cnt++;
+          }
+        }
+        out[y * w + x] = (sum ~/ cnt);
+      }
+    }
+  }
+  return out;
+}
+
+// Hue 보간(원형: 0~1) — 가장 짧은 방향으로 보간
+double _lerpHue(double a, double b, double t) {
+  double d = (b - a);
+  if (d > 0.5) d -= 1.0;
+  if (d < -0.5) d += 1.0;
+  double out = a + d * t;
+  if (out < 0) out += 1.0;
+  if (out > 1) out -= 1.0;
+  return out;
 }

@@ -7,6 +7,22 @@ import 'dart:ui';
 const leftEyeRing = [33, 246, 161, 160, 159, 158, 157, 173];
 const rightEyeRing = [362, 398, 384, 385, 386, 387, 388, 466];
 
+// 입술 안쪽(내부 링) — 치아/입안 제외용
+const List<int> lipsInner = [
+  78,
+  95,
+  88,
+  178,
+  87,
+  14,
+  317,
+  402,
+  318,
+  324,
+  308,
+  415,
+];
+
 const lipsOuter = [
   61,
   146,
