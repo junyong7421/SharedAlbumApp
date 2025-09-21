@@ -1,5 +1,6 @@
 // lib/services/shared_album_service.dart
 import 'dart:io';
+import 'dart:async'; // [추가] Timer, StreamSubscription
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -8,6 +9,17 @@ import 'package:image_picker/image_picker.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+
+/// =========================
+///  Top-level helper types
+/// =========================
+
+// [추가] 클래스 밖(top-level)에 선언: ops 커서(초기 캐치업 + 꼬리 스트림용)
+class OpsCursor {
+  final Timestamp? createdAt;
+  final String? docId;
+  const OpsCursor({this.createdAt, this.docId});
+}
 
 /// Firestore 구조(요지, 경로 분리 적용)
 /// albums/{albumId}
@@ -35,7 +47,7 @@ class SharedAlbumService {
   final _storage = FirebaseStorage.instance;
   final _picker = ImagePicker();
 
-  // ✅ Functions 리전 고정 (index.js와 동일해야 함)
+  // ✅ Functions 리전 고정 (index.js와 동일)
   final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
     region: 'us-central1',
   );
@@ -71,13 +83,12 @@ class SharedAlbumService {
   // ====== Cloud Function 호출 래퍼 (enqueueOp) ======
   /// 실시간 편집 OP 전송
   /// - 서버(Functions)에서 Firestore albums/{albumId}/ops 에 적재됨
-  /// - 클라에서는 watchEditOps()로 구독
+  /// - 클라에서는 ops 컬렉션을 photoId 기준으로 구독
   Future<void> sendEditOp({
     required String albumId,
-    required String photoId,
-    required Map<String, dynamic> op,
+    required String photoId, // 보통 originalPhotoId
+    required Map<String, dynamic> op, // {type, data, by}
   }) async {
-    // 사전 보장: 인증/앱체크
     await _ensureReady();
 
     final callable = _functions.httpsCallable(
@@ -92,30 +103,24 @@ class SharedAlbumService {
     try {
       await _call();
     } on FirebaseFunctionsException catch (e) {
-      // 인증 문제 → 토큰 리프레시 한 번 후 재시도
+      // 인증 문제 → 토큰 리프레시 후 재시도
       final retryableAuth = e.code == 'unauthenticated';
-      // 네트워크/일시 장애 → 한 번 재시도
+      // 네트워크/일시 장애 → 재시도
       final retryableNet =
           e.code == 'deadline-exceeded' || e.code == 'unavailable';
 
       if (retryableAuth || retryableNet) {
-        try {
-          await FirebaseAuth.instance.currentUser?.getIdToken(true);
-          await FirebaseAppCheck.instance.getToken(true);
-          await _call();
-          return;
-        } catch (_) {
-          rethrow;
-        }
+        await FirebaseAuth.instance.currentUser?.getIdToken(true);
+        await FirebaseAppCheck.instance.getToken(true);
+        await _call();
+        return;
       }
       rethrow;
     }
   }
 
   // ===== 편집 이벤트(ops) 실시간 구독 =====
-  /// 같은 photoId에 대해 시간순으로 모든 op 스트림 제공
-  /// - 서버에서 createdAt=serverTimestamp 로 기록하므로 동시간 충돌 방지용으로
-  ///   FieldPath.documentId 보조 정렬을 추가
+  /// 같은 photoId에 대한 OP를 createdAt → docId 순으로 정렬
   Stream<List<Map<String, dynamic>>> watchEditOps({
     required String albumId,
     required String photoId,
@@ -123,18 +128,169 @@ class SharedAlbumService {
     final q = _albumDoc(albumId)
         .collection('ops')
         .where('photoId', isEqualTo: photoId)
-        .orderBy('createdAt') // 시간순 정렬
+        .orderBy('createdAt', descending: false) // 시간순 정렬
         .orderBy(FieldPath.documentId); // 동시간 충돌 방지
 
     return q.snapshots().map(
-          (qs) => qs.docs
-              .map((d) => {
-                    'id': d.id, // 클라 dedupe에 유용
-                    ...d.data(),
-                  })
-              .toList(),
-        );
+      (qs) => qs.docs
+          .map((d) => {
+                'id': d.id, // 클라 dedupe에 유용
+                ...d.data(),
+              })
+          .toList(),
+    );
   }
+
+  // === ops 정리 유틸 ===
+
+  /// 현재 사진을 편집 중인 active 편집자 수(단발성)
+  Future<int> fetchActiveEditorCountForPhoto({
+    required String albumId,
+    required String photoId,
+  }) async {
+    final qs = await _editingByUserCol(albumId)
+        .where('status', isEqualTo: 'active')
+        .where('photoId', isEqualTo: photoId)
+        .limit(50)
+        .get();
+    return qs.docs.length;
+  }
+
+  /// 특정 사진의 ops 전부 삭제(배치로 안전하게)
+  Future<void> cleanupOpsForPhoto({
+    required String albumId,
+    required String photoId,
+    int batchSize = 400,
+  }) async {
+    final col = _albumDoc(albumId).collection('ops');
+    Query<Map<String, dynamic>> q =
+        col.where('photoId', isEqualTo: photoId).limit(batchSize);
+
+    while (true) {
+      final qs = await q.get();
+      if (qs.docs.isEmpty) break;
+
+      final batch = _fs.batch();
+      for (final d in qs.docs) {
+        batch.delete(d.reference);
+      }
+      await batch.commit();
+      if (qs.docs.length < batchSize) break; // 더 이상 없음
+    }
+  }
+
+  /// active 편집자가 없을 때에만 ops 비우기(경합 안전)
+  Future<void> tryCleanupOpsIfNoEditors({
+    required String albumId,
+    required String photoId,
+  }) async {
+    final cnt = await fetchActiveEditorCountForPhoto(
+      albumId: albumId,
+      photoId: photoId,
+    );
+    if (cnt == 0) {
+      await cleanupOpsForPhoto(albumId: albumId, photoId: photoId);
+    }
+  }
+
+  // ====== ⬇⬇⬇ ops 캐치업/꼬리 스트림 (null-safe) [추가/변경] ⬇⬇⬇ ======
+
+  // [추가] ops 초기 캐치업(커서 이후만 정렬 적용)
+  Future<List<Map<String, dynamic>>> fetchEditOpsCatchup({
+    required String albumId,
+    required String photoId,
+    OpsCursor? cursor,
+  }) async {
+    final col = _albumDoc(albumId).collection('ops');
+
+    Query<Map<String, dynamic>> q = col
+        .where('photoId', isEqualTo: photoId)
+        .orderBy('createdAt', descending: false)
+        .orderBy(FieldPath.documentId, descending: false);
+
+    if (cursor?.createdAt != null) {
+      q = q.where('createdAt', isGreaterThanOrEqualTo: cursor!.createdAt);
+    }
+
+    final qs = await q.get();
+    final List<Map<String, dynamic>> out = [];
+
+    for (final d in qs.docs) {
+      final m = d.data(); // QueryDocumentSnapshot는 non-null이지만 방어적으로 유지
+      if (m == null) continue;
+
+      final ts = m['createdAt'] as Timestamp?;
+      final id = d.id;
+
+      // 커서가 없으면 모두 통과
+      bool pass = (cursor == null || cursor.createdAt == null);
+      if (!pass && ts != null) {
+        final curMs = cursor!.createdAt!.millisecondsSinceEpoch;
+        final tsMs = ts.millisecondsSinceEpoch;
+        pass = tsMs > curMs ||
+            (tsMs == curMs && id.compareTo(cursor.docId ?? '') > 0);
+      }
+
+      if (pass) out.add({'id': id, ...m});
+    }
+
+    out.sort((a, b) {
+      final ta = (a['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+      final tb = (b['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+      if (ta != tb) return ta.compareTo(tb);
+      return (a['id'] as String).compareTo(b['id'] as String);
+    });
+
+    return out;
+  }
+
+  // [추가] ops 꼬리 스트림(커서 '초과'만 흘려보냄)
+  Stream<List<Map<String, dynamic>>> watchEditOpsTail({
+    required String albumId,
+    required String photoId,
+    required OpsCursor cursor,
+  }) {
+    final q = _albumDoc(albumId)
+        .collection('ops')
+        .where('photoId', isEqualTo: photoId)
+        .orderBy('createdAt', descending: false)
+        .orderBy(FieldPath.documentId, descending: false);
+
+    return q.snapshots().map((qs) {
+      final List<Map<String, dynamic>> added = [];
+
+      for (final c in qs.docChanges) {
+        if (c.type != DocumentChangeType.added) continue;
+
+        final m = c.doc.data();
+        if (m == null) continue;
+
+        final ts = m['createdAt'] as Timestamp?;
+        final id = c.doc.id;
+
+        bool pass = (cursor.createdAt == null);
+        if (!pass && ts != null) {
+          final curMs = cursor.createdAt!.millisecondsSinceEpoch;
+          final tsMs = ts.millisecondsSinceEpoch;
+          pass = tsMs > curMs ||
+              (tsMs == curMs && id.compareTo(cursor.docId ?? '') > 0);
+        }
+
+        if (pass) added.add({'id': id, ...m});
+      }
+
+      added.sort((a, b) {
+        final ta = (a['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+        final tb = (b['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+        if (ta != tb) return ta.compareTo(tb);
+        return (a['id'] as String).compareTo(b['id'] as String);
+      });
+
+      return added;
+    });
+  }
+
+  // ====== ↑↑↑ ops 캐치업/꼬리 스트림 (null-safe) [추가/변경] ↑↑↑ ======
 
   // 경로 헬퍼
   CollectionReference<Map<String, dynamic>> _albumsCol() =>
@@ -165,8 +321,8 @@ class SharedAlbumService {
         .where('memberUids', arrayContains: uid)
         .orderBy('updatedAt', descending: true);
     return q.snapshots().map(
-          (qs) => qs.docs.map((d) => Album.fromDoc(d.id, d.data())).toList(),
-        );
+      (qs) => qs.docs.map((d) => Album.fromDoc(d.id, d.data())).toList(),
+    );
   }
 
   Future<String> createAlbum({
@@ -263,8 +419,10 @@ class SharedAlbumService {
     if (allowMultiple) {
       picked = await _picker.pickMultiImage(imageQuality: 90);
     } else {
-      final single =
-          await _picker.pickImage(source: ImageSource.gallery, imageQuality: 90);
+      final single = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 90,
+      );
       if (single != null) picked = [single];
     }
     if (picked.isEmpty) return;
@@ -365,8 +523,8 @@ class SharedAlbumService {
   }) {
     final col = _photosCol(albumId).orderBy('createdAt', descending: true);
     return col.snapshots().map(
-          (qs) => qs.docs.map((d) => Photo.fromMap(d.id, d.data())).toList(),
-        );
+      (qs) => qs.docs.map((d) => Photo.fromMap(d.id, d.data())).toList(),
+    );
   }
 
   Future<void> toggleLike({
@@ -377,8 +535,9 @@ class SharedAlbumService {
   }) async {
     final ref = _photosCol(albumId).doc(photoId);
     await ref.update({
-      'likedBy':
-          like ? FieldValue.arrayUnion([uid]) : FieldValue.arrayRemove([uid]),
+      'likedBy': like
+          ? FieldValue.arrayUnion([uid])
+          : FieldValue.arrayRemove([uid]),
     });
   }
 
@@ -434,7 +593,7 @@ class SharedAlbumService {
       }
     } catch (_) {}
 
-    // photoId 자동 보정
+    // photoId 자동 보정(원본 우선)
     final effectivePhotoId = (photoId != null && photoId.isNotEmpty)
         ? photoId
         : ((originalPhotoId != null && originalPhotoId.isNotEmpty)
@@ -576,8 +735,9 @@ class SharedAlbumService {
         .orderBy('updatedAt', descending: true)
         .limit(50);
     return q.snapshots().map(
-      (qs) =>
-          qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data(), docId: d.id)).toList(),
+      (qs) => qs.docs
+          .map((d) => EditingInfo.fromDoc(albumId, d.data(), docId: d.id))
+          .toList(),
     );
   }
 
@@ -665,12 +825,14 @@ class SharedAlbumService {
     return 'albums/$albumId/edited/$photoId/$ts.$ext';
   }
 
+  // [변경] 마지막 커밋 주체 기록 필드 추가(lastCommitUid/At, saveToken)
   Future<void> saveEditedPhotoFromUrl({
     required String albumId,
     required String editorUid,
     required String originalPhotoId,
     required String editedUrl,
     String? storagePath,
+    String? saveToken, // [추가]
   }) async {
     final editedRef = _editedCol(albumId).doc();
 
@@ -684,6 +846,10 @@ class SharedAlbumService {
       'isEditing': false,
       'editingUid': null,
       'editingStartedAt': null,
+
+      'lastCommitUid': editorUid,                   // [추가]
+      'lastCommitAt': FieldValue.serverTimestamp(), // [추가]
+      if (saveToken != null) 'saveToken': saveToken, // [추가]
     });
 
     await clearEditingForTarget(
@@ -693,12 +859,14 @@ class SharedAlbumService {
     );
   }
 
+  // [변경] 마지막 커밋 주체 기록 필드 추가(lastCommitUid/At, saveToken)
   Future<void> saveEditedPhoto({
     required String albumId,
     required String url,
     required String editorUid,
     String? originalPhotoId,
     String? storagePath,
+    String? saveToken, // [추가]
   }) async {
     final ref = _editedCol(albumId).doc();
     await ref.set({
@@ -711,6 +879,10 @@ class SharedAlbumService {
       'isEditing': false,
       'editingUid': null,
       'editingStartedAt': null,
+
+      'lastCommitUid': editorUid,                   // [추가]
+      'lastCommitAt': FieldValue.serverTimestamp(), // [추가]
+      if (saveToken != null) 'saveToken': saveToken, // [추가]
     });
     await _albumDoc(albumId)
         .update({'updatedAt': FieldValue.serverTimestamp()});
@@ -733,16 +905,17 @@ class SharedAlbumService {
     await u.getIdToken(true);
     await FirebaseAppCheck.instance.getToken(true);
 
-    // 2) v2 콜러블 호출 (리전은 서버와 동일하게!)
+    // 2) v2 콜러블 호출 (리전은 서버와 동일)
     final fns = FirebaseFunctions.instanceFor(region: 'us-central1');
     final callable = fns.httpsCallable('whoAmI');
     final res = await callable.call();
 
-    // 3) 로그로 눈으로 확인
+    // 3) 로그 확인
     // ignore: avoid_print
-    print('whoAmI -> $res'); // hasAuth, uid, envProject, hasAppCheck 등이 찍힘
+    print('whoAmI -> $res');
   }
 
+  // [변경] 마지막 커밋 주체 기록 필드 추가(lastCommitUid/At, saveToken)
   Future<void> saveEditedPhotoOverwrite({
     required String albumId,
     required String editedId,
@@ -750,6 +923,7 @@ class SharedAlbumService {
     required String editorUid,
     String? newStoragePath,
     bool deleteOld = true,
+    String? saveToken, // [추가]
   }) async {
     final ref = _editedCol(albumId).doc(editedId);
 
@@ -768,6 +942,10 @@ class SharedAlbumService {
       'editingUid': null,
       'editingStartedAt': null,
       'updatedAt': FieldValue.serverTimestamp(),
+
+      'lastCommitUid': editorUid,                    // [추가]
+      'lastCommitAt': FieldValue.serverTimestamp(),  // [추가]
+      if (saveToken != null) 'saveToken': saveToken, // [추가]
     });
 
     await _albumDoc(albumId)
@@ -788,8 +966,8 @@ class SharedAlbumService {
   Stream<List<EditedPhoto>> watchEditedPhotos(String albumId) {
     final q = _editedCol(albumId).orderBy('createdAt', descending: true);
     return q.snapshots().map(
-          (qs) => qs.docs.map((d) => EditedPhoto.fromDoc(d.id, d.data())).toList(),
-        );
+      (qs) => qs.docs.map((d) => EditedPhoto.fromDoc(d.id, d.data())).toList(),
+    );
   }
 
   Future<void> deleteEditedPhoto({
