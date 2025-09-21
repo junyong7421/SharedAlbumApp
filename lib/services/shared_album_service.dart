@@ -1,8 +1,13 @@
 // lib/services/shared_album_service.dart
 import 'dart:io';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
+
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 
 /// Firestore 구조(요지, 경로 분리 적용)
 /// albums/{albumId}
@@ -22,7 +27,6 @@ import 'package:image_picker/image_picker.dart';
 /// Storage 권장 경로:
 ///   albums/{albumId}/original/{file}.jpg|png...
 ///   albums/{albumId}/edited/{photoId}/{millis}.png
-
 class SharedAlbumService {
   SharedAlbumService._();
   static final SharedAlbumService instance = SharedAlbumService._();
@@ -30,6 +34,107 @@ class SharedAlbumService {
   final _fs = FirebaseFirestore.instance;
   final _storage = FirebaseStorage.instance;
   final _picker = ImagePicker();
+
+  // ✅ Functions 리전 고정 (index.js와 동일해야 함)
+  final FirebaseFunctions _functions = FirebaseFunctions.instanceFor(
+    region: 'us-central1',
+  );
+
+  // ---------- 공통 보장 유틸 ----------
+  Future<User> _ensureSignedIn() async {
+    final auth = FirebaseAuth.instance;
+    var u = auth.currentUser;
+    if (u == null) {
+      u = (await auth.signInAnonymously()).user!;
+    }
+    // 권한/클레임 최신화
+    await u.getIdToken(true);
+    return u;
+  }
+
+  Future<void> _ensureAppCheckReady() async {
+    try {
+      await FirebaseAppCheck.instance.getToken(true);
+    } catch (_) {
+      // 아주 짧게 한 번 더
+      await Future.delayed(const Duration(milliseconds: 200));
+      await FirebaseAppCheck.instance.getToken(true);
+    }
+  }
+
+  Future<void> _ensureReady() async {
+    await _ensureSignedIn();
+    await _ensureAppCheckReady();
+  }
+  // -----------------------------------
+
+  // ====== Cloud Function 호출 래퍼 (enqueueOp) ======
+  /// 실시간 편집 OP 전송
+  /// - 서버(Functions)에서 Firestore albums/{albumId}/ops 에 적재됨
+  /// - 클라에서는 watchEditOps()로 구독
+  Future<void> sendEditOp({
+    required String albumId,
+    required String photoId,
+    required Map<String, dynamic> op,
+  }) async {
+    // 사전 보장: 인증/앱체크
+    await _ensureReady();
+
+    final callable = _functions.httpsCallable(
+      'enqueueOp',
+      options: HttpsCallableOptions(timeout: const Duration(seconds: 10)),
+    );
+
+    Future<void> _call() async {
+      await callable.call({'albumId': albumId, 'photoId': photoId, 'op': op});
+    }
+
+    try {
+      await _call();
+    } on FirebaseFunctionsException catch (e) {
+      // 인증 문제 → 토큰 리프레시 한 번 후 재시도
+      final retryableAuth = e.code == 'unauthenticated';
+      // 네트워크/일시 장애 → 한 번 재시도
+      final retryableNet =
+          e.code == 'deadline-exceeded' || e.code == 'unavailable';
+
+      if (retryableAuth || retryableNet) {
+        try {
+          await FirebaseAuth.instance.currentUser?.getIdToken(true);
+          await FirebaseAppCheck.instance.getToken(true);
+          await _call();
+          return;
+        } catch (_) {
+          rethrow;
+        }
+      }
+      rethrow;
+    }
+  }
+
+  // ===== 편집 이벤트(ops) 실시간 구독 =====
+  /// 같은 photoId에 대해 시간순으로 모든 op 스트림 제공
+  /// - 서버에서 createdAt=serverTimestamp 로 기록하므로 동시간 충돌 방지용으로
+  ///   FieldPath.documentId 보조 정렬을 추가
+  Stream<List<Map<String, dynamic>>> watchEditOps({
+    required String albumId,
+    required String photoId,
+  }) {
+    final q = _albumDoc(albumId)
+        .collection('ops')
+        .where('photoId', isEqualTo: photoId)
+        .orderBy('createdAt') // 시간순 정렬
+        .orderBy(FieldPath.documentId); // 동시간 충돌 방지
+
+    return q.snapshots().map(
+          (qs) => qs.docs
+              .map((d) => {
+                    'id': d.id, // 클라 dedupe에 유용
+                    ...d.data(),
+                  })
+              .toList(),
+        );
+  }
 
   // 경로 헬퍼
   CollectionReference<Map<String, dynamic>> _albumsCol() =>
@@ -241,8 +346,9 @@ class SharedAlbumService {
             .orderBy('createdAt', descending: true)
             .limit(1)
             .get();
-        newCover =
-            latest.docs.isNotEmpty ? latest.docs.first.data()['url'] as String : null;
+        newCover = latest.docs.isNotEmpty
+            ? latest.docs.first.data()['url'] as String
+            : null;
       }
 
       tx.update(albumRef, {
@@ -470,9 +576,9 @@ class SharedAlbumService {
         .orderBy('updatedAt', descending: true)
         .limit(50);
     return q.snapshots().map(
-          (qs) =>
-              qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data(), docId: d.id)).toList(),
-        );
+      (qs) =>
+          qs.docs.map((d) => EditingInfo.fromDoc(albumId, d.data(), docId: d.id)).toList(),
+    );
   }
 
   // 앨범의 세션(단발성) - active만
@@ -616,6 +722,25 @@ class SharedAlbumService {
         photoId: originalPhotoId,
       );
     }
+  }
+
+  Future<void> ensureAuthAndAppCheckReady() => _ensureReady();
+
+  Future<void> debugWhoAmI() async {
+    // 1) 로그인/앱체크 토큰 확보
+    final u = FirebaseAuth.instance.currentUser ??
+        (await FirebaseAuth.instance.signInAnonymously()).user!;
+    await u.getIdToken(true);
+    await FirebaseAppCheck.instance.getToken(true);
+
+    // 2) v2 콜러블 호출 (리전은 서버와 동일하게!)
+    final fns = FirebaseFunctions.instanceFor(region: 'us-central1');
+    final callable = fns.httpsCallable('whoAmI');
+    final res = await callable.call();
+
+    // 3) 로그로 눈으로 확인
+    // ignore: avoid_print
+    print('whoAmI -> $res'); // hasAuth, uid, envProject, hasAppCheck 등이 찍힘
   }
 
   Future<void> saveEditedPhotoOverwrite({

@@ -1,32 +1,54 @@
+const admin = require("firebase-admin");
+
+// v2 import
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { setGlobalOptions } = require("firebase-functions/v2/options");
+
+// Admin 초기화
+if (admin.apps.length === 0) {
+  admin.initializeApp();
+}
+
+// 리전/인스턴스 전역 기본값
+setGlobalOptions({
+  region: "us-central1",
+  maxInstances: 10,
+  invoker: "public",
+});
+
 /**
- * Import function triggers from their respective submodules:
- *
- * const {onCall} = require("firebase-functions/v2/https");
- * const {onDocumentWritten} = require("firebase-functions/v2/firestore");
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
+ * 실시간 편집 OP 적재
+ * Firestore 경로: albums/{albumId}/ops
+ * 문서 필드: photoId, by, createdAt, type, data, op(원본)
  */
+exports.enqueueOp = onCall(async (request) => {
+  const uid = request.auth && request.auth.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in required");
+  }
 
-const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/https");
-const logger = require("firebase-functions/logger");
+  const albumId = request.data?.albumId;
+  const photoId = request.data?.photoId;
+  const op = request.data?.op; // { type, data }
 
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
-setGlobalOptions({ maxInstances: 10 });
+  if (!albumId || !photoId || !op || !op.type) {
+    throw new HttpsError(
+      "invalid-argument",
+      "albumId/photoId/op.type required"
+    );
+  }
 
-// Create and deploy your first functions
-// https://firebase.google.com/docs/functions/get-started
+  const db = admin.firestore();
+  const opsCol = db.collection("albums").doc(albumId).collection("ops");
 
-// exports.helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+  await opsCol.add({
+    photoId,
+    by: uid,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    type: op.type,
+    data: op.data ?? {},
+    op,
+  });
+
+  return { ok: true };
+});

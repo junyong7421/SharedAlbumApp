@@ -2,10 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import 'screens/login_screen.dart';
-
-// 전역 오버레이용 네비게이터 키
 import 'screens/voice_call_overlay.dart';
 
 Future<void> main() async {
@@ -15,32 +14,38 @@ Future<void> main() async {
   await Firebase.initializeApp();
 
   // 2) App Check 활성화
-  //
-  //  - 개발(kDebugMode=true): Debug Provider 사용
-  //    * App Check가 Enforce(강제)면 '디버그 토큰'을 콘솔에 등록해야 통과합니다.
-  //    * Monitoring(모니터링) 상태면 등록 없이도 요청은 통과(로그만 남음).
-  //
-  //  - 릴리즈: Android는 Play Integrity, iOS는 App Attest(미지원 기기는 DeviceCheck 고려)
   await FirebaseAppCheck.instance.activate(
-    androidProvider: kDebugMode
-        ? AndroidProvider.debug
-        : AndroidProvider.playIntegrity,
+    // **안드로이드는 테스트 목적상 강제로 디버그 모드** (물리 단말 Play Services 이슈 회피)
+    androidProvider: AndroidProvider.debug, // **변경**
     appleProvider: kDebugMode ? AppleProvider.debug : AppleProvider.appAttest,
   );
 
-  // 3) App Check 토큰 자동 갱신 (기본값 true지만 명시해도 OK)
+  // 3) App Check 토큰 자동 갱신
   await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
 
-  // (선택) 디버그에서 토큰 한 번 받아보기 — 개발 확인용. 배포 시 제거 권장.
+  // (선택) 디버그에서 App Check 토큰 미리 받아서 준비
   if (kDebugMode) {
     try {
-      final token = await FirebaseAppCheck.instance.getToken();
-      debugPrint('🔥 App Check debug token (for dev check only): $token');
-      // 실제 운영 로그에 토큰 노출은 비추!
+      final appCheckToken = await FirebaseAppCheck.instance.getToken(
+        true,
+      ); // String? 반환
+      debugPrint('AppCheck token: $appCheckToken');
     } catch (e) {
       debugPrint('App Check token fetch failed: $e');
     }
   }
+
+  // 4) Functions 호출 전 인증 보장: 익명 로그인 + ID 토큰 강제 갱신
+  if (FirebaseAuth.instance.currentUser == null) {
+    await FirebaseAuth.instance.signInAnonymously();
+  }
+  await FirebaseAuth.instance.currentUser!.getIdToken(true); // **유지(중요)**
+  await FirebaseAuth.instance.authStateChanges().firstWhere((u) => u != null);
+
+  // **추가: 최종 셀프 체크 로그**
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  final idt = await FirebaseAuth.instance.currentUser?.getIdToken();
+  debugPrint('Auth uid=$uid, idToken? ${idt != null}'); // **추가**
 
   runApp(const MyApp());
 }
@@ -52,10 +57,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-
-      // ✅ 전역 오버레이를 위해 꼭 필요
       navigatorKey: rootNavigatorKey,
-      
       title: 'Shared Album App',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
