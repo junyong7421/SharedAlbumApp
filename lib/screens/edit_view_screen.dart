@@ -43,6 +43,146 @@ class EditViewScreen extends StatefulWidget {
   State<EditViewScreen> createState() => _EditViewScreenState();
 }
 
+class _ConfirmExitPopup extends StatelessWidget {
+  const _ConfirmExitPopup({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFFF6F9FF),
+      shape: RoundedRectangleBorder(
+        side: const BorderSide(color: Color(0xFF625F8C), width: 2),
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              '편집이 저장되지 않았습니다',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF625F8C),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '저장하지 않고 나가시겠습니까?',
+              style: TextStyle(
+                fontSize: 14,
+                color: Color(0xFF625F8C),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 28),
+
+            // 버튼 영역
+            // 버튼 영역 (Stack 제거 → Column으로)
+SizedBox(
+  height: 92, // 전체 버튼 영역 높이 (원하면 84~100 사이로 조절)
+  child: Column(
+    children: [
+      // 위쪽: 저장 안 함 / 저장 (가운데 정렬)
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _GradientButton(
+            label: '저장 안 함',
+            onTap: () => Navigator.pop(context, 'discard'),
+            width: 116,
+            height: 40,
+          ),
+          const SizedBox(width: 45), // 두 버튼 간 간격
+          _GradientButton(
+            label: '저장',
+            onTap: () => Navigator.pop(context, 'save'),
+            width: 96,
+            height: 40,
+          ),
+        ],
+      ),
+
+      const Spacer(), // 아래로 공간 밀어냄
+
+      // 아래: 취소 (좌측 하단 고정, 작게)
+      Align(
+        alignment: Alignment.bottomLeft,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 4), // 가장자리 여백
+          child: _GradientButton(
+            label: '취소',
+            onTap: () => Navigator.pop(context, 'cancel'),
+            width: 60,   // 반 사이즈
+            height: 28,  // 반 사이즈
+            fontSize: 12,
+          ),
+        ),
+      ),
+    ],
+  ),
+),
+
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GradientButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final double width;
+  final double height;
+  final double fontSize;
+
+  const _GradientButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.width = 100,
+    this.height = 40,
+    this.fontSize = 14,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black12,
+              blurRadius: 4,
+              offset: Offset(1, 1),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: fontSize,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
 class _EditViewScreenState extends State<EditViewScreen> {
   // ▼ 4개 툴 전환: 0=자르기, 1=얼굴보정, 2=밝기, 3=회전/반전
   int _selectedTool = -1; // 0=자르기,1=얼굴보정,2=밝기,3=회전/반전
@@ -776,46 +916,30 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return;
     }
 
-    // 마지막 편집자면 기존 팝업
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('편집이 저장되지 않았습니다'),
-        content: const Text('저장하지 않고 나가시겠습니까?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'cancel'),
-            child: const Text('취소'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'discard'),
-            child: const Text('저장 안 함'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, 'save'),
-            child: const Text('저장'),
-          ),
-        ],
-      ),
-    );
+    // 마지막 편집자면 커스텀 디자인 팝업
+final result = await showDialog<String>(
+  context: context,
+  barrierDismissible: false,
+  builder: (ctx) => const _ConfirmExitPopup(),
+);
 
     switch (result) {
-      case 'save':
-        await _onSave();
-        break;
-      case 'discard':
-        await _endSession();
-        if (widget.albumId != null && _targetKey != null) {
-          await _svc.tryCleanupOpsIfNoEditors(
-            albumId: widget.albumId!,
-            photoId: _targetKey!,
-          );
-        }
-        if (mounted) Navigator.pop(context, {'status': 'discard'});
-        break;
-      default:
-        break;
+  case 'save':
+    await _onSave();
+    break;
+  case 'discard':
+    await _endSession();
+    if (widget.albumId != null && _targetKey != null) {
+      await _svc.tryCleanupOpsIfNoEditors(
+        albumId: widget.albumId!,
+        photoId: _targetKey!,
+      );
     }
+    if (mounted) Navigator.pop(context, {'status': 'discard'});
+    break;
+  default:
+    break;
+}
   }
 
   Future<void> _handleBack() async {
