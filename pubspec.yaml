@@ -20,11 +20,12 @@ dependencies:
   google_sign_in: ^6.1.0
   shared_preferences: ^2.2.2
   image: ^4.1.0
-  cloud_functions: ^5.1.4
+  cloud_functions: ^5.6.2       # [병합] 최신 버전 선택
+  livekit_client: ^2.5.1        # [병합] 추가
+  flutter_webrtc: ^1.2.0        # [병합] 추가
 
 dev_dependencies:
   flutter_test:
-
     sdk: flutter
   flutter_lints: ^5.0.0
 

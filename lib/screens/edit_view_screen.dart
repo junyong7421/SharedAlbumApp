@@ -16,6 +16,7 @@ import '../beauty/beauty_panel.dart';
 import 'package:sharedalbumapp/beauty/beauty_controller.dart';
 import '../edit_tools/image_ops.dart';
 import '../edit_tools/crop_overlay.dart';
+import 'package:image/image.dart' as img;
 
 class EditViewScreen extends StatefulWidget {
   final String albumName;
@@ -34,18 +35,17 @@ class EditViewScreen extends StatefulWidget {
     this.originalPhotoId,
     this.photoId,
   }) : assert(
-          albumId != null || imagePath != null,
-          'albumId 또는 imagePath 중 하나는 반드시 필요합니다.',
-        );
+         albumId != null || imagePath != null,
+         'albumId 또는 imagePath 중 하나는 반드시 필요합니다.',
+       );
 
   @override
   State<EditViewScreen> createState() => _EditViewScreenState();
 }
 
 class _EditViewScreenState extends State<EditViewScreen> {
-  // 툴: 0=자르기, 1=얼굴보정, 2=밝기, 3=회전/반전
-  int _selectedTool = 1;
-
+  // ▼ 4개 툴 전환: 0=자르기, 1=얼굴보정, 2=밝기, 3=회전/반전
+  int _selectedTool = -1; // 0=자르기,1=얼굴보정,2=밝기,3=회전/반전
   Rect? _cropRectStage;
   Size? _lastStageSize;
 
@@ -58,11 +58,22 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // OPS에서 마지막으로 본 밝기 절대값(슬라이더/이미지 통일 기준)
   double _latestBrightnessValue = 0.0;
 
+  // 얼굴별 보정 파라미터 저장소
+  final Map<int, BeautyParams> _faceParams = {};
+
+  // 얼굴보정 전용 Undo 스택 (적용할 때마다 push)
+  final List<({Uint8List image, Map<int, BeautyParams> params})> _faceUndo = [];
+
+  // 얼굴보정 오버레이 캡처 제외용
+  bool _faceOverlayOn = true;
+
   final List<IconData> _toolbarIcons = const [
     Icons.crop,
     Icons.face_retouching_natural,
     Icons.brightness_6,
     Icons.rotate_90_degrees_ccw,
+    Icons.color_lens, // 4 채도
+    Icons.hdr_strong, // 5 선명도(샤픈)
   ];
 
   final int _selectedIndex = 2;
@@ -90,7 +101,25 @@ class _EditViewScreenState extends State<EditViewScreen> {
   bool _dimOthers = false;
 
   BeautyParams _beautyParams = BeautyParams();
-  Uint8List? _beautyBasePng;
+  Uint8List? _beautyBasePng; // 보정/저장용 결과
+
+  // 얼굴 파라미터(deep copy)
+  Map<int, BeautyParams> _cloneParams(Map<int, BeautyParams> src) {
+    final out = <int, BeautyParams>{};
+    src.forEach((k, v) {
+      out[k] = v.copyWith(); // 새로운 BeautyParams 생성
+    });
+    return out;
+  }
+
+  double _saturation = 0.0;
+  bool _saturationApplying = false;
+
+  double _sharp = 0.0; // 0.0 ~ 1.0 (0이 원본)
+  bool _sharpenApplying = false;
+
+  // 조정 패널 들어올 때 스냅샷(베이스)
+  Uint8List? _adjustBaseBytes;
 
   bool _dirty = false;
   bool get _hasUnsavedChanges => _dirty || _cropRectStage != null;
@@ -107,10 +136,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
   String? _lastOpDocId;
 
   // === 누적 변환의 "절대 상태" ===
-  int _rotDeg = 0;          // 0/90/180/270
+  int _rotDeg = 0; // 0/90/180/270
   bool _flipHState = false; // 좌우 반전
   bool _flipVState = false; // 상하 반전
-  Rect? _cropNorm;          // 0~1 정규화 크롭(l,t,r,b)
+  Rect? _cropNorm; // 0~1 정규화 크롭(l,t,r,b)
 
   // ===== 공용 유틸 =====
   Future<Uint8List> _currentBytes() async {
@@ -134,7 +163,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final dstRect = Rect.fromLTWH(0, 0, cw.toDouble(), ch.toDouble());
-    final srcRect = Rect.fromLTWH(sx.toDouble(), sy.toDouble(), cw.toDouble(), ch.toDouble());
+    final srcRect = Rect.fromLTWH(
+      sx.toDouble(),
+      sy.toDouble(),
+      cw.toDouble(),
+      ch.toDouble(),
+    );
     final paint = Paint();
     canvas.drawImageRect(img, srcRect, dstRect, paint);
     final picture = recorder.endRecording();
@@ -157,13 +191,30 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   // ===== PNG 캡처/업로드 =====
-  Future<Uint8List> _exportEditedImageBytes({double pixelRatio = 2.5}) async {
+  // 개선된 버전만 유지
+  Future<Uint8List> _exportEditedImageBytes({
+    double pixelRatio = 2.5,
+    bool hideOverlay = false, // 캡처 직전에 오버레이 숨길지
+  }) async {
+    final prevOverlay = _faceOverlayOn;
+    if (hideOverlay && prevOverlay) {
+      setState(() => _faceOverlayOn = false);
+      await Future.delayed(const Duration(milliseconds: 16));
+    }
+
     final boundary =
-        _captureKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+        _captureKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
     if (boundary == null) throw StateError('캡처 대상을 찾지 못했습니다.');
+
     final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
     final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
     if (byteData == null) throw StateError('PNG 인코딩 실패');
+
+    if (hideOverlay && prevOverlay && mounted) {
+      setState(() => _faceOverlayOn = true);
+    }
+
     return byteData.buffer.asUint8List();
   }
 
@@ -190,7 +241,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return (url: url, storagePath: storagePath);
   }
 
-  // ===== 저장 =====
   Future<void> _onSave() async {
     if (widget.albumId == null) {
       if (mounted) {
@@ -198,14 +248,24 @@ class _EditViewScreenState extends State<EditViewScreen> {
           const SnackBar(content: Text('저장할 수 없습니다 (albumId 없음)')),
         );
       }
+      return;
     }
     if (_isSaving || !_isImageReady) return;
     _isSaving = true;
 
     try {
-      final png = await _exportEditedImageBytes();
+      // ✅ 현재 결과를 PNG로 변환
+      final raw = await _currentBytes();
+      Uint8List _asPng(Uint8List b) {
+        final im = img.decodeImage(b);
+        if (im == null) throw StateError('이미지를 디코드할 수 없습니다.');
+        return Uint8List.fromList(img.encodePng(im));
+      }
+
+      final png = _asPng(raw);
       final uploaded = await _uploadEditedPngBytes(png);
 
+      // 문서 갱신 로직 (editedId / originalPhotoId / rootPhotoId 분기)
       if ((widget.editedId ?? '').isNotEmpty) {
         await _svc.saveEditedPhotoOverwrite(
           albumId: widget.albumId!,
@@ -224,53 +284,46 @@ class _EditViewScreenState extends State<EditViewScreen> {
           storagePath: uploaded.storagePath,
         );
       } else {
-        // [변경][root] saveEditedPhoto는 originalPhotoId가 꼭 필요(서비스에서 강제)
-        if (_targetKey == null) {
-          throw StateError('rootPhotoId를 확인할 수 없습니다.');
-        }
+        if (_targetKey == null) throw StateError('rootPhotoId를 확인할 수 없습니다.');
         await _svc.saveEditedPhoto(
           albumId: widget.albumId!,
           url: uploaded.url,
           editorUid: _uid,
-          originalPhotoId: _targetKey!, // ← root를 명시
+          originalPhotoId: _targetKey!,
           storagePath: uploaded.storagePath,
         );
       }
 
-      // 커밋 신호(OP) 브로드캐스트
+      // OP 브로드캐스트 + 정리
       if (_targetKey != null) {
-        await _sendOp('commit', {'by': _uid, 'at': DateTime.now().toIso8601String()});
+        await _sendOp('commit', {
+          'by': _uid,
+          'at': DateTime.now().toIso8601String(),
+        });
         await Future.delayed(const Duration(milliseconds: 200));
-      }
-
-      // 마지막 편집자면 ops 정리
-      if (_targetKey != null) {
         await _svc.tryCleanupOpsIfNoEditors(
           albumId: widget.albumId!,
           photoId: _targetKey!,
         );
       }
+
       _appliedDocIds.clear();
       _seenOpIds.clear();
       _lastOpTs = null;
       _lastOpDocId = null;
-
-      // 세션 종료
-      try {
-        await _svc.endEditing(uid: _uid, albumId: widget.albumId!);
-      } catch (_) {}
+      await _svc
+          .endEditing(uid: _uid, albumId: widget.albumId!)
+          .catchError((_) {});
 
       _dirty = false;
       if (!mounted) return;
-
-      Navigator.pop(context, {
-        'status': 'saved',
-        'editedUrl': uploaded.url,
-      });
+      Navigator.pop(context, {'status': 'saved', 'editedUrl': uploaded.url});
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('저장 실패: $e')));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('저장 실패: $e')));
+      }
     } finally {
       _isSaving = false;
     }
@@ -308,72 +361,76 @@ class _EditViewScreenState extends State<EditViewScreen> {
         }
         return;
 
-      case 'brightness': {
-        final v = (data['value'] as num?)?.toDouble() ?? 0.0;
-        final base = await _renderBaseForBrightness();
-        _brightnessBaseBytes = Uint8List.fromList(base);
-        _latestBrightnessValue = v;
-        setState(() => _brightness = v);
+      case 'brightness':
+        {
+          final v = (data['value'] as num?)?.toDouble() ?? 0.0;
+          final base = await _renderBaseForBrightness();
+          _brightnessBaseBytes = Uint8List.fromList(base);
+          _latestBrightnessValue = v;
+          setState(() => _brightness = v);
 
-        final out = (v.abs() < 1e-6)
-            ? _brightnessBaseBytes!
-            : ImageOps.adjustBrightness(_brightnessBaseBytes!, v);
-        setState(() => _editedBytes = out);
-        break;
-      }
-
-      case 'crop': {
-        if (_lastStageSize == null) return;
-        final l = (data['l'] as num).toDouble();
-        final t = (data['t'] as num).toDouble();
-        final r = (data['r'] as num).toDouble();
-        final b = (data['b'] as num).toDouble();
-        final stageRect = Rect.fromLTRB(
-          l * _lastStageSize!.width,
-          t * _lastStageSize!.height,
-          r * _lastStageSize!.width,
-          b * _lastStageSize!.height,
-        );
-        final bytes = await _currentBytes();
-        final out = ImageOps.cropFromStageRect(
-          srcBytes: bytes,
-          stageCropRect: stageRect,
-          stageSize: _lastStageSize!,
-        );
-        setState(() => _editedBytes = out);
-
-        _cropNorm = Rect.fromLTRB(l, t, r, b);
-        await _reapplyBrightnessIfActive();
-        break;
-      }
-
-      case 'rotate': {
-        final deg = (data['deg'] as num?)?.toInt() ?? 0;
-        final bytesR = await _currentBytes();
-        setState(() => _editedBytes = ImageOps.rotate(bytesR, deg));
-
-        _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
-        await _reapplyBrightnessIfActive();
-        break;
-      }
-
-      case 'flip': {
-        final dir = (data['dir'] as String?) ?? 'h'; // 'h' | 'v'
-        final bytesF = await _currentBytes();
-        setState(() {
-          _editedBytes = (dir == 'v')
-              ? ImageOps.flipVertical(bytesF)
-              : ImageOps.flipHorizontal(bytesF);
-        });
-
-        if (dir == 'v') {
-          _flipVState = !_flipVState;
-        } else {
-          _flipHState = !_flipHState;
+          final out = (v.abs() < 1e-6)
+              ? _brightnessBaseBytes!
+              : ImageOps.adjustBrightness(_brightnessBaseBytes!, v);
+          setState(() => _editedBytes = out);
+          break;
         }
-        await _reapplyBrightnessIfActive();
-        break;
-      }
+
+      case 'crop':
+        {
+          if (_lastStageSize == null) return;
+          final l = (data['l'] as num).toDouble();
+          final t = (data['t'] as num).toDouble();
+          final r = (data['r'] as num).toDouble();
+          final b = (data['b'] as num).toDouble();
+          final stageRect = Rect.fromLTRB(
+            l * _lastStageSize!.width,
+            t * _lastStageSize!.height,
+            r * _lastStageSize!.width,
+            b * _lastStageSize!.height,
+          );
+          final bytes = await _currentBytes();
+          final out = ImageOps.cropFromStageRect(
+            srcBytes: bytes,
+            stageCropRect: stageRect,
+            stageSize: _lastStageSize!,
+          );
+          setState(() => _editedBytes = out);
+
+          _cropNorm = Rect.fromLTRB(l, t, r, b);
+          await _reapplyBrightnessIfActive();
+          break;
+        }
+
+      case 'rotate':
+        {
+          final deg = (data['deg'] as num?)?.toInt() ?? 0;
+          final bytesR = await _currentBytes();
+          setState(() => _editedBytes = ImageOps.rotate(bytesR, deg));
+
+          _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
+          await _reapplyBrightnessIfActive();
+          break;
+        }
+
+      case 'flip':
+        {
+          final dir = (data['dir'] as String?) ?? 'h'; // 'h' | 'v'
+          final bytesF = await _currentBytes();
+          setState(() {
+            _editedBytes = (dir == 'v')
+                ? ImageOps.flipVertical(bytesF)
+                : ImageOps.flipHorizontal(bytesF);
+          });
+
+          if (dir == 'v') {
+            _flipVState = !_flipVState;
+          } else {
+            _flipHState = !_flipHState;
+          }
+          await _reapplyBrightnessIfActive();
+          break;
+        }
     }
     _dirty = true;
   }
@@ -413,7 +470,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
         // op 추출(서버가 op 필드에 래핑 저장)
         final opMap = (data['op'] as Map?)?.cast<String, dynamic>();
-        final op = opMap ??
+        final op =
+            opMap ??
             <String, dynamic>{
               'type': data['type'],
               'data': data['data'],
@@ -422,7 +480,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
         // 중복 체크: 문서ID + opId
         final docId = d.id;
-        final opId = (op['opId'] as String?) ??
+        final opId =
+            (op['opId'] as String?) ??
             ((op['editorUid'] != null)
                 ? '${op['editorUid']}_${data['createdAt'] ?? ''}_$docId'
                 : null);
@@ -458,7 +517,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
       }
 
       _opsSub?.cancel();
-      _opsSub = q.snapshots(includeMetadataChanges: true).listen(_onOpsSnapshot);
+      _opsSub = q
+          .snapshots(includeMetadataChanges: true)
+          .listen(_onOpsSnapshot);
 
       // 3) 프레임 이후 세션 등록
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -466,8 +527,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('초기 준비 실패: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('초기 준비 실패: $e')));
     }
   }
 
@@ -482,7 +544,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
       // op 래핑 추출
       final opMap = (m['op'] as Map?)?.cast<String, dynamic>();
-      final op = opMap ??
+      final op =
+          opMap ??
           <String, dynamic>{
             'type': m['type'],
             'data': m['data'],
@@ -497,8 +560,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
         final tsMine = m['createdAt'];
         if (tsMine is Timestamp) {
           if (_lastOpTs == null ||
-              tsMine.millisecondsSinceEpoch > _lastOpTs!.millisecondsSinceEpoch ||
-              (tsMine == _lastOpTs && (docId.compareTo(_lastOpDocId ?? '') > 0))) {
+              tsMine.millisecondsSinceEpoch >
+                  _lastOpTs!.millisecondsSinceEpoch ||
+              (tsMine == _lastOpTs &&
+                  (docId.compareTo(_lastOpDocId ?? '') > 0))) {
             _lastOpTs = tsMine;
             _lastOpDocId = docId;
           }
@@ -507,8 +572,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
       }
 
       // opId 중복 방지
-      final opId = (op['opId'] as String?) ??
-          ((sender != null) ? '${sender}_${m['createdAt'] ?? ''}_$docId' : null);
+      final opId =
+          (op['opId'] as String?) ??
+          ((sender != null)
+              ? '${sender}_${m['createdAt'] ?? ''}_$docId'
+              : null);
       if (opId != null && _seenOpIds.contains(opId)) {
         _appliedDocIds.add(docId);
         continue;
@@ -540,7 +608,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return widget.originalPhotoId;
     }
     // 2) 재편집에서 진입: edited/{editedId} 에서 originalPhotoId를 가져온다.
-    if ((widget.editedId ?? '').isNotEmpty && (widget.albumId ?? '').isNotEmpty) {
+    if ((widget.editedId ?? '').isNotEmpty &&
+        (widget.albumId ?? '').isNotEmpty) {
       try {
         final snap = await FirebaseFirestore.instance
             .collection('albums')
@@ -582,8 +651,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
     // [변경][root] 프레임 이후 비동기로 루트키 계산 → 구독 시작
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final rk = await _computeRootKey();
-      setState(() => _targetKey = rk);   // 항상 rootPhotoId
-      await _prepareAndSubscribe();      // 루트 키 확보 후 실행
+      setState(() => _targetKey = rk); // 항상 rootPhotoId
+      await _prepareAndSubscribe(); // 루트 키 확보 후 실행
     });
   }
 
@@ -609,8 +678,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
         .get();
 
     // 나 제외하고 0명이면 마지막 편집자
-    final others =
-        qs.docs.where((d) => ((d.data()['uid'] as String?) ?? d.id) != _uid).length;
+    final others = qs.docs
+        .where((d) => ((d.data()['uid'] as String?) ?? d.id) != _uid)
+        .length;
     return others == 0;
   }
 
@@ -888,7 +958,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
               label,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white),
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
             ),
           ),
         ],
@@ -912,16 +985,27 @@ class _EditViewScreenState extends State<EditViewScreen> {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
               gradient: const LinearGradient(
-                colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+                colors: [
+                  Color(0xFFC6DCFF),
+                  Color(0xFFD2D1FF),
+                  Color(0xFFF5CFFF),
+                ],
               ),
               boxShadow: const [
-                BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(1, 1)),
+                BoxShadow(
+                  color: Colors.black12,
+                  blurRadius: 4,
+                  offset: Offset(1, 1),
+                ),
               ],
             ),
             child: Text(
               label,
               style: const TextStyle(
-                fontSize: 14, fontWeight: FontWeight.w600, color: Colors.white),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
             ),
           ),
         ),
@@ -939,7 +1023,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (widget.imagePath != null) _buildSinglePreview(widget.imagePath!),
+              if (widget.imagePath != null)
+                _buildSinglePreview(widget.imagePath!),
               if (_selectedTool == 0)
                 Positioned.fill(
                   child: CropOverlay(
@@ -989,7 +1074,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
         loadingBuilder: (c, child, progress) {
           if (progress == null) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && !_isImageReady) setState(() => _isImageReady = true);
+              if (mounted && !_isImageReady)
+                setState(() => _isImageReady = true);
             });
             return child;
           }
@@ -1000,8 +1086,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
         errorBuilder: (_, __, ___) {
           if (mounted && _isImageReady) setState(() => _isImageReady = false);
           return const Center(
-            child: Text('이미지를 불러오지 못했습니다',
-                style: TextStyle(color: Color(0xFF625F8C))),
+            child: Text(
+              '이미지를 불러오지 못했습니다',
+              style: TextStyle(color: Color(0xFF625F8C)),
+            ),
           );
         },
       );
@@ -1052,6 +1140,16 @@ class _EditViewScreenState extends State<EditViewScreen> {
                       _brightness = _latestBrightnessValue;
                     });
                   }
+                  // 얼굴보정 이탈 → 스택 비우기 (얼굴 보정 undo만 관리)
+                  _faceUndo.clear();
+
+                  // 조정툴 진입 시 베이스 스냅샷
+                  if (i == 2 || i == 4 || i == 5) {
+                    _adjustBaseBytes = await _currentBytes();
+                    if (i == 2) _brightness = 0.0;
+                    if (i == 4) _saturation = 0.0;
+                    if (i == 5) _sharp = 0.0;
+                  }
                   setState(() {
                     _isFaceEditMode = false;
                     _selectedTool = i;
@@ -1074,12 +1172,16 @@ class _EditViewScreenState extends State<EditViewScreen> {
           }),
         ),
         const SizedBox(height: 8),
+
+        /// ⬇️ 이 부분이 빠져서 패널이 안 보였던 거예요!
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
           child: switch (_selectedTool) {
             0 => _cropPanel(),
             2 => _brightnessPanel(),
             3 => _rotatePanel(),
+            4 => _saturationPanel(),
+            5 => _sharpenPanel(),
             _ => const SizedBox.shrink(),
           },
         ),
@@ -1088,102 +1190,234 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Widget _cropPanel() => Row(
-        key: const ValueKey('crop'),
+    key: const ValueKey('crop'),
+    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    children: [
+      _pill(
+        '초기화',
+        () => setState(() {
+          _cropRectStage = null;
+          _editedBytes = null; // 원본으로 복귀
+        }),
+      ),
+      _pill('맞춤', () {
+        if (_lastStageSize == null) return;
+        final s = _lastStageSize!;
+        setState(() {
+          _cropRectStage = Rect.fromLTWH(
+            s.width * 0.1,
+            s.height * 0.1,
+            s.width * 0.8,
+            s.height * 0.8,
+          );
+        });
+      }),
+      _pill('적용', _applyCrop),
+    ],
+  );
+
+  // ===== 툴바 패널 =====
+  Widget _brightnessPanel() => Column(
+    key: const ValueKey('brightness'),
+    children: [
+      Row(
+        children: [
+          const SizedBox(width: 8),
+          const Icon(Icons.brightness_low, size: 18),
+          Expanded(
+            child: SizedBox(
+              height: 36,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(trackHeight: 4),
+                    child: Slider(
+                      value: _brightness,
+                      min: -0.5,
+                      max: 0.5,
+                      divisions: 20,
+                      label: _brightness.toStringAsFixed(2),
+                      onChanged: (v) {
+                        setState(() {
+                          _brightness = v;
+                          _dirty = true;
+                        });
+                      },
+                      onChangeEnd: (_) async {
+                        await _applyBrightness();
+                      },
+                    ),
+                  ),
+                  IgnorePointer(
+                    child: Container(
+                      width: 2,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade500,
+                        borderRadius: BorderRadius.circular(1),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const Icon(Icons.brightness_high, size: 18),
+          const SizedBox(width: 8),
+        ],
+      ),
+      if (_brightnessApplying)
+        const SizedBox(height: 2, child: LinearProgressIndicator()),
+    ],
+  );
+
+  Widget _saturationPanel() => Column(
+    key: const ValueKey('saturation'),
+    children: [
+      Row(
+        children: [
+          const SizedBox(width: 8),
+          const Icon(Icons.colorize, size: 18),
+          Expanded(
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // 0 위치 표시 막대
+                const _ZeroTick(),
+                Slider(
+                  value: _saturation,
+                  min: -1.0,
+                  max: 1.0,
+                  divisions: 40,
+                  label: _saturation.toStringAsFixed(2),
+                  onChanged: (v) => setState(() => _saturation = v),
+                  onChangeEnd: (_) => _applySaturation(),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.palette, size: 18),
+          const SizedBox(width: 8),
+        ],
+      ),
+      Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          _pill('초기화', () async {
-            await _resetToOriginal();
-          }),
-          _pill('맞춤', () {
-            if (_lastStageSize == null) return;
-            final s = _lastStageSize!;
-            setState(() => _cropRectStage =
-                Rect.fromLTWH(s.width * 0.1, s.height * 0.1, s.width * 0.8, s.height * 0.8));
-          }),
-          _pill('적용', () async {
-            await _applyCrop();
+          _pill('초기화', () {
+            setState(() => _saturation = 0.0);
+            _applySaturation();
           }),
         ],
-      );
+      ),
+      if (_saturationApplying)
+        const SizedBox(height: 2, child: LinearProgressIndicator()),
+    ],
+  );
 
-  Widget _brightnessPanel() => Column(
-        key: const ValueKey('brightness'),
+  Widget _sharpenPanel() => Column(
+    key: const ValueKey('sharpen'),
+    children: [
+      Row(
         children: [
-          Row(
-            children: [
-              const SizedBox(width: 8),
-              const Icon(Icons.brightness_low, size: 18),
-              Expanded(
-                child: SizedBox(
-                  height: 36,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      SliderTheme(
-                        data: SliderTheme.of(context).copyWith(trackHeight: 4),
-                        child: Slider(
-                          value: _brightness,
-                          min: -0.5,
-                          max: 0.5,
-                          divisions: 20,
-                          label: _brightness.toStringAsFixed(2),
-                          onChanged: (v) {
-                            setState(() {
-                              _brightness = v;
-                              _dirty = true;
-                            });
-                          },
-                          onChangeEnd: (_) async {
-                            await _applyBrightness();
-                          },
-                        ),
-                      ),
-                      IgnorePointer(
-                        child: Container(
-                          width: 2,
-                          height: 14,
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade500,
-                            borderRadius: BorderRadius.circular(1),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const Icon(Icons.brightness_high, size: 18),
-              const SizedBox(width: 8),
-            ],
+          const SizedBox(width: 8),
+          const Icon(Icons.blur_on, size: 18),
+          Expanded(
+            child: Slider(
+              value: _sharp,
+              min: 0.0,
+              max: 1.0,
+              divisions: 20,
+              label: _sharp.toStringAsFixed(2),
+              onChanged: (v) => setState(() => _sharp = v),
+              onChangeEnd: (_) => _applySharpen(),
+            ),
           ),
-          if (_brightnessApplying)
-            const SizedBox(height: 2, child: LinearProgressIndicator()),
+          const Icon(Icons.hdr_strong, size: 18),
+          const SizedBox(width: 8),
         ],
-      );
+      ),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _pill('초기화', () {
+            setState(() => _sharp = 0.0); // ← 샤픈 값을 리셋
+            _applySharpen(); // ← 샤픈 적용 함수 호출
+          }),
+        ],
+      ),
+      if (_sharpenApplying)
+        const SizedBox(height: 2, child: LinearProgressIndicator()),
+    ],
+  );
+
+  Future<void> _applySaturation() async {
+    _faceUndo.clear();
+    if (_saturationApplying) return;
+    _saturationApplying = true;
+    setState(() {});
+    try {
+      final base = _adjustBaseBytes ?? await _currentBytes();
+      if (_saturation.abs() < 1e-6) {
+        setState(() => _editedBytes = base);
+      } else {
+        final out = ImageOps.adjustSaturation(base, _saturation);
+        setState(() => _editedBytes = out);
+      }
+    } finally {
+      _saturationApplying = false;
+      setState(() {});
+    }
+  }
+
+  Future<void> _applySharpen() async {
+    _faceUndo.clear();
+    if (_sharpenApplying) return;
+    _sharpenApplying = true;
+    setState(() {});
+    try {
+      final base = _adjustBaseBytes ?? await _currentBytes();
+      if (_sharp.abs() < 1e-6) {
+        setState(() => _editedBytes = base);
+      } else {
+        final out = ImageOps.sharpen(base, _sharp);
+        setState(() => _editedBytes = out);
+      }
+    } finally {
+      _sharpenApplying = false;
+      setState(() {});
+    }
+  }
 
   Widget _rotatePanel() => Row(
-        key: const ValueKey('rotate'),
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _pill('왼쪽 90°', () async => _applyRotate(-90)),
-          _pill('오른쪽 90°', () async => _applyRotate(90)),
-          _pill('좌우 반전', () async => _applyFlipH()),
-          _pill('상하 반전', () async => _applyFlipV()),
-        ],
-      );
+    key: const ValueKey('rotate'),
+    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    children: [
+      _pill('왼쪽 90°', () async => _applyRotate(-90)),
+      _pill('오른쪽 90°', () async => _applyRotate(90)),
+      _pill('좌우 반전', () async => _applyFlipH()),
+      _pill('상하 반전', () async => _applyFlipV()),
+    ],
+  );
 
   Future<void> _applyCrop() async {
+    _faceUndo.clear();
     if (_cropRectStage == null || _lastStageSize == null) return;
     final s = _lastStageSize!;
     final r = _cropRectStage!;
     final norm = {
-      'l': r.left / s.width, 't': r.top / s.height,
-      'r': r.right / s.width, 'b': r.bottom / s.height
+      'l': r.left / s.width,
+      't': r.top / s.height,
+      'r': r.right / s.width,
+      'b': r.bottom / s.height,
     };
 
     final bytes = await _currentBytes();
     final out = ImageOps.cropFromStageRect(
-      srcBytes: bytes, stageCropRect: r, stageSize: s);
+      srcBytes: bytes,
+      stageCropRect: r,
+      stageSize: s,
+    );
     setState(() {
       _editedBytes = out;
       _cropRectStage = null;
@@ -1197,17 +1431,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _applyBrightness() async {
+    _faceUndo.clear();
     if (_brightnessApplying) return;
     _brightnessApplying = true;
     setState(() {});
 
     try {
-      if (_brightnessBaseBytes == null) {
-        final base = await _renderBaseForBrightness();
-        _brightnessBaseBytes = Uint8List.fromList(base);
-      }
-
-      _latestBrightnessValue = _brightness;
+      // ✅ 항상 결정적 앵커 기반
+      final base = await _renderBaseForBrightness();
+      _brightnessBaseBytes = Uint8List.fromList(base);
 
       final out = (_brightness.abs() < 1e-6)
           ? _brightnessBaseBytes!
@@ -1218,6 +1450,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
         _dirty = true;
       });
 
+      _latestBrightnessValue = _brightness;
       await _sendOp('brightness', {'value': _brightness});
     } finally {
       _brightnessApplying = false;
@@ -1226,6 +1459,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _resetToOriginal() async {
+    _faceUndo.clear();
     await _loadOriginalBytes();
     setState(() {
       _editedBytes = null;
@@ -1236,15 +1470,18 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _beautyBasePng = null;
       _latestBrightnessValue = 0.0;
       _dirty = false;
-
       _rotDeg = 0;
       _flipHState = false;
       _flipVState = false;
       _cropNorm = null;
+      _saturation = 0.0;
+      _sharp = 0.0;
+      _adjustBaseBytes = null;
     });
   }
 
   Future<void> _applyRotate(int deg) async {
+    _faceUndo.clear();
     final bytes = await _currentBytes();
     setState(() {
       _editedBytes = ImageOps.rotate(bytes, deg);
@@ -1258,6 +1495,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _applyFlipH() async {
+    _faceUndo.clear();
     final bytes = await _currentBytes();
     setState(() {
       _editedBytes = ImageOps.flipHorizontal(bytes);
@@ -1271,6 +1509,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _applyFlipV() async {
+    _faceUndo.clear();
     final bytes = await _currentBytes();
     setState(() {
       _editedBytes = ImageOps.flipVertical(bytes);
@@ -1284,46 +1523,78 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Widget _pill(String label, VoidCallback onTap) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            color: const Color(0xFFF2F4FF),
-          ),
-          child: Text(label, style: const TextStyle(fontSize: 12)),
-        ),
-      );
+    onTap: onTap,
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        color: const Color(0xFFF2F4FF),
+      ),
+      child: Text(label, style: const TextStyle(fontSize: 12)),
+    ),
+  );
 
-  // 얼굴보정 툴바(기존 그대로)
+  // 얼굴 보정 툴바 — 중복된 아이콘 제거
   Widget _buildFaceEditToolbar() {
+    final canUndo = _faceUndo.isNotEmpty;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _faceTool(icon: Icons.close, onTap: () {
-          setState(() {
-            _isFaceEditMode = false;
-            _faces468.clear();
-            _faceRects.clear();
-            _selectedFace = null;
-          });
-        }),
-        _faceTool(icon: Icons.center_focus_strong, onTap: () {
-          if (_faceRects.isEmpty) return;
-          int largest = 0; double best = -1;
-          for (int i = 0; i < _faceRects.length; i++) {
-            final r = _faceRects[i]; final area = (r.width * r.height);
-            if (area > best) { best = area; largest = i; }
-          }
-          setState(() => _selectedFace = largest);
-        }),
-        _faceTool(icon: _showLm ? Icons.visibility : Icons.visibility_off,
-            onTap: () => setState(() => _showLm = !_showLm)),
+        // 닫기
+        _faceTool(icon: Icons.close, onTap: _exitFaceMode),
+
+        // 가장 큰 얼굴 자동 선택
+        _faceTool(
+          icon: Icons.center_focus_strong,
+          onTap: () {
+            if (_faceRects.isEmpty) return;
+            int largest = 0;
+            double best = -1;
+            for (int i = 0; i < _faceRects.length; i++) {
+              final r = _faceRects[i];
+              final area = r.width * r.height;
+              if (area > best) {
+                best = area;
+                largest = i;
+              }
+            }
+            setState(() => _selectedFace = largest);
+          },
+        ),
+
+        // 랜드마크 토글
+        _faceTool(
+          icon: _showLm ? Icons.visibility : Icons.visibility_off,
+          onTap: () => setState(() => _showLm = !_showLm),
+        ),
+
+        // Undo
+        _faceToolEx(
+          icon: Icons.undo,
+          enabled: canUndo,
+          onTap: canUndo ? _undoFaceOnce : null,
+        ),
+
+        // 보정 패널
         _faceTool(icon: Icons.brush, onTap: _openBeautyPanel),
       ],
     );
   }
 
+  Future<void> _undoFaceOnce() async {
+    if (_faceUndo.isEmpty) return;
+    final snap = _faceUndo.removeLast();
+    setState(() {
+      _editedBytes = snap.image;
+      // ✅ 재할당 대신, 내용만 교체
+      _faceParams
+        ..clear()
+        ..addAll(_cloneParams(snap.params)); // 아래 2) 참고
+    });
+  }
+
+  // 작은 공통 위젯
   Widget _faceTool({required IconData icon, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
@@ -1334,36 +1605,100 @@ class _EditViewScreenState extends State<EditViewScreen> {
     );
   }
 
+  // 추후 슬라이더(피부/눈/코/입술) 넣을 자리
+  // edit_view_screen.dart
   Future<void> _openBeautyPanel() async {
     if (_selectedFace == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('얼굴을 먼저 선택하세요.')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('얼굴을 먼저 선택하세요.')));
       return;
     }
-    _beautyBasePng ??= await _exportEditedImageBytes(pixelRatio: 1.0);
-    final Size stageSize = _captureKey.currentContext!.size!;
-    final result = await showModalBottomSheet<({Uint8List image, BeautyParams params})>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => BeautyPanel(
-        srcPng: _beautyBasePng!,
-        faces468: _faces468,
-        selectedFace: _selectedFace!,
-        imageSize: stageSize,
-        initialParams: _beautyParams,
-      ),
+
+    // 1) 현재 이미지 바이트를 PNG로 통일
+    final base = await _currentBytes();
+    Uint8List _ensurePng(Uint8List b) {
+      final im = img.decodeImage(b);
+      return Uint8List.fromList(img.encodePng(im!));
+    }
+
+    _beautyBasePng = _ensurePng(base);
+
+    // 2) 실제 이미지 픽셀 크기 계산
+    final imInfo = img.decodeImage(_beautyBasePng!)!;
+    final Size imgSize = Size(
+      imInfo.width.toDouble(),
+      imInfo.height.toDouble(),
     );
+
+    // 3) 얼굴별 저장된 파라미터 초기값
+    final init = _faceParams[_selectedFace!] ?? BeautyParams();
+
+    // 4) 모달 1회 호출 (원본 해상도 + 실제 이미지 크기)
+    final result =
+        await showModalBottomSheet<({Uint8List image, BeautyParams params})>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.white,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (_) => BeautyPanel(
+            srcPng: _beautyBasePng!,
+            faces468: _faces468,
+            selectedFace: _selectedFace!,
+            imageSize: imgSize,
+            initialParams: init,
+          ),
+        );
+
+    // 5) 반영
     if (result != null && mounted) {
+      final prev = await _currentBytes();
+      final paramsCopy = _cloneParams(_faceParams);
       setState(() {
         _editedBytes = result.image;
         _beautyParams = result.params;
         _dirty = true;
+        _faceUndo.add((image: Uint8List.fromList(prev), params: paramsCopy));
+        _faceParams[_selectedFace!] = result.params;
       });
     }
+  }
+
+  void _exitFaceMode() {
+    // 기본 툴바로 복귀
+    setState(() {
+      _isFaceEditMode = false; // ← 이 한 줄이 핵심
+      _selectedTool = 1; // 메인툴바에서 '얼굴' 아이콘 선택 상태 유지(원하면 다른 인덱스로)
+      _selectedFace = null; // 선택 해제(선택)
+      _showLm = false; // 랜드마크 표시 끔(선택)
+    });
+
+    // 얼굴보정 전용 undo 스택은 정리(선택)
+    _faceUndo.clear();
+    // _beautyBasePng = null; // 필요하면 캡처 베이스도 초기화
+  }
+
+  // 사용감 좋은 변형
+  Widget _faceToolEx({
+    required IconData icon,
+    required VoidCallback? onTap,
+    bool enabled = true,
+  }) {
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.35,
+      child: IgnorePointer(
+        ignoring: !enabled,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 4),
+            child: Icon(icon, size: 22, color: Colors.black87),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _loadOriginalBytes() async {
@@ -1413,8 +1748,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   // 얼굴 검출(필요 시 구현)
-  Future<void> _smokeTestLoadTask() async { /* 그대로/생략 */ }
-  Future<void> _runFaceDetect() async { /* 그대로/생략 */ }
+  Future<void> _smokeTestLoadTask() async {
+    /* 그대로/생략 */
+  }
+  Future<void> _runFaceDetect() async {
+    /* 그대로/생략 */
+  }
 }
 
 class _EditorPresence {
@@ -1454,7 +1793,11 @@ class _LmOverlayPainter extends CustomPainter {
         for (final p in pts) {
           final dx = p.dx * paintSize.width;
           final dy = p.dy * paintSize.height;
-          canvas.drawCircle(Offset(dx, dy), isSel ? 2.2 : 1.4, isSel ? selDot : dot);
+          canvas.drawCircle(
+            Offset(dx, dy),
+            isSel ? 2.2 : 1.4,
+            isSel ? selDot : dot,
+          );
         }
       }
     }
@@ -1475,16 +1818,18 @@ class _LmOverlayPainter extends CustomPainter {
 
       final w = rectPx.width, h = rectPx.height;
       final lStart = Offset(rectPx.left + w * 0.12, rectPx.top + h * 0.22);
-      final lCtrl  = Offset(rectPx.left - w * 0.05, rectPx.top + h * 0.62);
-      final lEnd   = Offset(rectPx.left + w * 0.18, rectPx.bottom - h * 0.10);
-      final pathL = Path()..moveTo(lStart.dx, lStart.dy)
+      final lCtrl = Offset(rectPx.left - w * 0.05, rectPx.top + h * 0.62);
+      final lEnd = Offset(rectPx.left + w * 0.18, rectPx.bottom - h * 0.10);
+      final pathL = Path()
+        ..moveTo(lStart.dx, lStart.dy)
         ..quadraticBezierTo(lCtrl.dx, lCtrl.dy, lEnd.dx, lEnd.dy);
       canvas.drawPath(pathL, stroke);
 
       final rStart = Offset(rectPx.right - w * 0.12, rectPx.top + h * 0.22);
-      final rCtrl  = Offset(rectPx.right + w * 0.05, rectPx.top + h * 0.62);
-      final rEnd   = Offset(rectPx.right - w * 0.18, rectPx.bottom - h * 0.10);
-      final pathR = Path()..moveTo(rStart.dx, rStart.dy)
+      final rCtrl = Offset(rectPx.right + w * 0.05, rectPx.top + h * 0.62);
+      final rEnd = Offset(rectPx.right - w * 0.18, rectPx.bottom - h * 0.10);
+      final pathR = Path()
+        ..moveTo(rStart.dx, rStart.dy)
         ..quadraticBezierTo(rCtrl.dx, rCtrl.dy, rEnd.dx, rEnd.dy);
       canvas.drawPath(pathR, stroke);
     }
@@ -1499,3 +1844,19 @@ class _LmOverlayPainter extends CustomPainter {
       old.showLm != showLm ||
       old.dimOthers != dimOthers;
 }
+
+class _ZeroTick extends StatelessWidget {
+  const _ZeroTick({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      ignoring: true,
+      child: Align(
+        alignment: Alignment.center,
+        child: Container(width: 2, height: 16, color: Colors.black12),
+      ),
+    );
+  }
+}
+
+enum _ActiveHandle { none, move, tl, tr, bl, br, top, right, bottom, left }

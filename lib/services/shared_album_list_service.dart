@@ -1,6 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'voice_livekit_service.dart' as vk;
+import 'dart:developer' as dev;
 
+//
 class SharedAlbumListService {
   SharedAlbumListService._();
   static final SharedAlbumListService instance = SharedAlbumListService._();
@@ -27,6 +30,14 @@ class SharedAlbumListService {
           .toList();
       return list;
     });
+  }
+
+  Future<void> _ensureSignedIn() async {
+    final a = FirebaseAuth.instance;
+    if (a.currentUser == null) {
+      await a.signInAnonymously();
+    }
+    dev.log('Auth uid: ${a.currentUser?.uid}', name: 'Auth'); // 로그로 확인
   }
 
   /// 앨범의 멤버 프로필들
@@ -117,15 +128,13 @@ class SharedAlbumListService {
     String? email,
     String? photoUrl,
   }) async {
+    await _ensureSignedIn(); // ✅ 추가 (가장 중요)
     final me = _auth.currentUser;
     final myUid = uid ?? me?.uid;
     if (myUid == null) throw StateError('No signed-in user');
 
-    // name/email/photoUrl이 없으면 users/{uid}에서 보완
-    String? _name = name;
-    String? _email = email;
-    String? _photo = photoUrl;
-
+    // name/email/photoUrl 보완
+    String? _name = name, _email = email, _photo = photoUrl;
     if (_name == null || _email == null || _photo == null) {
       final uDoc = await _fs.collection('users').doc(myUid).get();
       if (uDoc.exists) {
@@ -140,9 +149,15 @@ class SharedAlbumListService {
       }
     }
 
+    // 1) LiveKit 방 접속 (실패하면 프레즌스 기록 X)
+    await vk.VoiceLivekitService.instance.join(
+      roomName: albumId,
+      displayName: (_name?.isNotEmpty == true) ? _name! : (_email ?? myUid),
+    );
+
+    // 2) Firestore 프레즌스 기록
     final batch = _fs.batch();
 
-    // 참가자 문서 upsert
     final participantRef = _fs
         .collection('albums')
         .doc(albumId)
@@ -152,14 +167,13 @@ class SharedAlbumListService {
         .doc(myUid);
 
     batch.set(participantRef, {
-      'uid': myUid, // 검색/디버깅용
+      'uid': myUid,
       'name': _name ?? '',
       'email': _email ?? '',
       'photoUrl': _photo,
       'joinedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
 
-    // 현재 접속 상태 기록
     final sessionRef = _fs.collection('voiceSessions').doc(myUid);
     batch.set(sessionRef, {
       'albumId': albumId,
@@ -170,16 +184,16 @@ class SharedAlbumListService {
   }
 
   /// (2) 보이스톡 퇴장
-  Future<void> leaveVoice({
-    required String albumId,
-    String? uid,
-  }) async {
+  Future<void> leaveVoice({required String albumId, String? uid}) async {
     final myUid = uid ?? _auth.currentUser?.uid;
     if (myUid == null) return;
 
+    // 1) LiveKit 종료
+    await vk.VoiceLivekitService.instance.leave();
+
+    // 2) 프레즌스 삭제
     final batch = _fs.batch();
 
-    // 참가자 문서 삭제
     final participantRef = _fs
         .collection('albums')
         .doc(albumId)
@@ -189,7 +203,6 @@ class SharedAlbumListService {
         .doc(myUid);
     batch.delete(participantRef);
 
-    // 접속 상태 삭제
     final sessionRef = _fs.collection('voiceSessions').doc(myUid);
     batch.delete(sessionRef);
 
@@ -198,40 +211,44 @@ class SharedAlbumListService {
 
   /// (3) 현재 보이스톡 접속자 실시간 구독
   Stream<List<AlbumMember>> watchVoiceParticipants(String albumId) {
-    final col = _fs
-        .collection('albums')
-        .doc(albumId)
-        .collection('voice')
-        .doc('participants')
-        .collection('list')
-        .orderBy('joinedAt');
-
-    return col.snapshots().map((snap) {
-      return snap.docs.map((d) {
-        final x = d.data();
-        return AlbumMember(
-          uid: d.id,
-          name: (x['name'] ?? '') as String,
-          email: (x['email'] ?? '') as String,
-          photoUrl: x['photoUrl'] as String?,
-        );
+    return vk.VoiceLivekitService.instance.participantsStream.map((remotes) {
+      return remotes.map((p) {
+        final name = (p.name?.isNotEmpty == true)
+            ? p.name!
+            : (p.identity ?? 'user');
+        final id = p.sid ?? p.identity ?? '';
+        return AlbumMember(uid: id, name: name, email: '', photoUrl: null);
       }).toList();
     });
   }
 
   /// (4) 내가 현재 보이스톡에 참가 중인 앨범 id (없으면 null)
   /// - 인덱스 없이 1문서 조회
-  Future<String?> getMyActiveVoiceAlbumId() async {
-    final me = _auth.currentUser;
-    if (me == null) return null;
-
-    final snap = await _fs.collection('voiceSessions').doc(me.uid).get();
-    if (!snap.exists) return null;
-
-    final data = snap.data();
-    final albumId = data?['albumId'] as String?;
-    return (albumId != null && albumId.isNotEmpty) ? albumId : null;
+Future<String?> getMyActiveVoiceAlbumId() async {
+  // 1) 실제 LiveKit 연결이면 그 방을 신뢰
+  if (vk.VoiceLivekitService.instance.connected) {
+    return vk.VoiceLivekitService.instance.currentRoomName;
   }
+
+  // 2) 세션 문서는 크래시로 남을 수 있으니 "최근 것"만 유효 취급
+  final me = _auth.currentUser;
+  if (me == null) return null;
+
+  final snap = await _fs.collection('voiceSessions').doc(me.uid).get();
+  if (!snap.exists) return null;
+
+  final data = snap.data();
+  final albumId = data?['albumId'] as String?;
+  final ts = data?['joinedAt'] as Timestamp?;
+  if (albumId == null || albumId.isEmpty) return null;
+
+  // 10분 이상 지나면 무시 (원하면 3~5분으로 줄여도 됨)
+  if (ts == null || DateTime.now().difference(ts.toDate()).inMinutes > 10) {
+    return null;
+  }
+  return albumId;
+}
+
 }
 
 /// ===== 모델 =====

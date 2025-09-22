@@ -50,7 +50,12 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     double lightness = 0.55,
   }) {
     final h = _stableHash(uid) % 360;
-    return HSLColor.fromAHSL(1.0, h.toDouble(), saturation, lightness).toColor();
+    return HSLColor.fromAHSL(
+      1.0,
+      h.toDouble(),
+      saturation,
+      lightness,
+    ).toColor();
   }
 
   // ====================== SegmentedHeart 위젯 (분할 하트) ======================
@@ -68,7 +73,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
         painter: _HeartPainter(
           totalSlots: totalSlots,
           filledColors: filledColors,
-          outlineColor: isLikedByMe ? const Color(0xFF625F8C) : Colors.grey.shade400,
+          outlineColor: isLikedByMe
+              ? const Color(0xFF625F8C)
+              : Colors.grey.shade400,
         ),
       ),
     );
@@ -323,9 +330,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('편집 화면 진입 실패: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('편집 화면 진입 실패: $e')));
       }
     } finally {
       _isNavigating = false;
@@ -566,7 +573,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     final albumId = _selectedAlbumId!;
     final title = _selectedAlbumTitle ?? '앨범';
 
-    final albumDocRef = FirebaseFirestore.instance.collection('albums').doc(albumId);
+    final albumDocRef = FirebaseFirestore.instance
+        .collection('albums')
+        .doc(albumId);
 
     return Column(
       children: [
@@ -640,7 +649,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
               }
               final albumData = albumSnap.data!.data()!;
               final List<String> albumMembers =
-                  ((albumData['memberUids'] ?? []) as List).map((e) => e.toString()).toList();
+                  ((albumData['memberUids'] ?? []) as List)
+                      .map((e) => e.toString())
+                      .toList();
 
               final totalSlots = max(1, min(albumMembers.length, 12));
 
@@ -663,7 +674,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
                   if (snap.connectionState == ConnectionState.waiting) {
                     return const Center(
-                      child: CircularProgressIndicator(color: Color(0xFF625F8C)),
+                      child: CircularProgressIndicator(
+                        color: Color(0xFF625F8C),
+                      ),
                     );
                   }
 
@@ -672,7 +685,10 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                     return const Center(
                       child: Text(
                         '사진이 없습니다',
-                        style: TextStyle(color: Color(0xFF625F8C), fontSize: 16),
+                        style: TextStyle(
+                          color: Color(0xFF625F8C),
+                          fontSize: 16,
+                        ),
                       ),
                     );
                   }
@@ -680,20 +696,25 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                   if (_selectedImageIndex == null) {
                     // ===================== 그리드(썸네일) =====================
                     return GridView.builder(
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        crossAxisSpacing: 8,
-                        mainAxisSpacing: 8,
-                      ),
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            crossAxisSpacing: 8,
+                            mainAxisSpacing: 8,
+                          ),
                       itemCount: photos.length,
                       itemBuilder: (context, i) {
                         final p = photos[i];
                         final likedUids = p.likedBy;
                         final isLikedByMe = likedUids.contains(_uid);
-                        final likedColors = likedUids.map((u) => colorForUid(u)).toList();
+                        final likedColors = likedUids
+                            .map((u) => colorForUid(u))
+                            .toList();
 
                         final m = likedUids.length;
-                        final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m);
+                        final totalSlotsForRender = m == 0
+                            ? 0
+                            : (m > 12 ? 12 : m);
 
                         return GestureDetector(
                           onTap: () => setState(() => _selectedImageIndex = i),
@@ -716,7 +737,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                   children: [
                                     segmentedHeart(
                                       totalSlots: totalSlotsForRender,
-                                      filledColors: likedColors.take(totalSlotsForRender).toList(),
+                                      filledColors: likedColors
+                                          .take(totalSlotsForRender)
+                                          .toList(),
                                       size: 18,
                                       isLikedByMe: isLikedByMe,
                                       onTap: () async {
@@ -729,22 +752,32 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                           );
                                         } catch (e) {
                                           if (!mounted) return;
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('좋아요 실패: $e')),
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text('좋아요 실패: $e'),
+                                            ),
                                           );
                                         }
                                       },
                                     ),
                                     const SizedBox(width: 4),
                                     Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: Colors.black45,
                                         borderRadius: BorderRadius.circular(10),
                                       ),
                                       child: Text(
                                         '${p.likedBy.length}',
-                                        style: const TextStyle(color: Colors.white, fontSize: 11),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 11,
+                                        ),
                                       ),
                                     ),
                                   ],
@@ -763,28 +796,38 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                     return PageView.builder(
                       controller: controller,
                       itemCount: photos.length,
-                      onPageChanged: (i) => setState(() => _selectedImageIndex = i),
+                      onPageChanged: (i) =>
+                          setState(() => _selectedImageIndex = i),
                       itemBuilder: (context, i) {
                         final p = photos[i];
                         final likedUids = p.likedBy;
                         final isLikedByMe = likedUids.contains(_uid);
-                        final likedColors = likedUids.map((u) => colorForUid(u)).toList();
+                        final likedColors = likedUids
+                            .map((u) => colorForUid(u))
+                            .toList();
 
                         final m = likedUids.length;
-                        final totalSlotsForRender = m == 0 ? 0 : (m > 12 ? 12 : m);
+                        final totalSlotsForRender = m == 0
+                            ? 0
+                            : (m > 12 ? 12 : m);
 
                         return Column(
                           children: [
                             Align(
                               alignment: Alignment.topRight,
                               child: Padding(
-                                padding: const EdgeInsets.only(bottom: 10, right: 4),
+                                padding: const EdgeInsets.only(
+                                  bottom: 10,
+                                  right: 4,
+                                ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     segmentedHeart(
                                       totalSlots: totalSlotsForRender,
-                                      filledColors: likedColors.take(totalSlotsForRender).toList(),
+                                      filledColors: likedColors
+                                          .take(totalSlotsForRender)
+                                          .toList(),
                                       size: 28,
                                       isLikedByMe: isLikedByMe,
                                       onTap: () async {
@@ -797,8 +840,12 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                           );
                                         } catch (e) {
                                           if (!mounted) return;
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text('좋아요 실패: $e')),
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text('좋아요 실패: $e'),
+                                            ),
                                           );
                                         }
                                       },
@@ -826,7 +873,9 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                           ScaffoldMessenger.of(
                                             context,
                                           ).showSnackBar(
-                                            SnackBar(content: Text('삭제 실패: $e')),
+                                            SnackBar(
+                                              content: Text('삭제 실패: $e'),
+                                            ),
                                           );
                                         }
                                       },
@@ -918,81 +967,81 @@ class _HeartPainter extends CustomPainter {
     required this.outlineColor,
   });
 
+  // 더 클래식한 하트(좌우 대칭, 위 볼 선명, 아래 포인트 뚜렷)
   Path _heartPath(Size s) {
     final w = s.width, h = s.height;
     final p = Path();
-    final top = Offset(w * 0.5, h * 0.28);
-    final leftCtrl1 = Offset(w * 0.15, h * 0.05);
-    final leftCtrl2 = Offset(w * 0.02, h * 0.35);
-    final left = Offset(w * 0.25, h * 0.58);
-    final rightCtrl1 = Offset(w * 0.98, h * 0.35);
-    final rightCtrl2 = Offset(w * 0.85, h * 0.05);
-    final right = Offset(w * 0.75, h * 0.58);
-    final bottom = Offset(w * 0.5, h * 0.95);
 
-    p.moveTo(top.dx, top.dy);
-    p.cubicTo(leftCtrl1.dx, leftCtrl1.dy, leftCtrl2.dx, leftCtrl2.dy, left.dx, left.dy);
-    p.cubicTo(w * 0.25, h * 0.80, w * 0.40, h * 0.88, bottom.dx, bottom.dy);
-    p.cubicTo(w * 0.60, h * 0.88, w * 0.75, h * 0.80, right.dx, right.dy);
-    p.cubicTo(rightCtrl2.dx, rightCtrl2.dy, rightCtrl1.dx, rightCtrl1.dy, top.dx, top.dy);
+    // 비율 고정(아이콘 사이즈 상관없이 동일 실루엣)
+    final topY = 0.28 * h;
+    final leftX = 0.22 * w;
+    final rightX = 0.78 * w;
+    final midX = 0.50 * w;
+    final botY = 0.94 * h;
+
+    // 시작: 위 중앙 약간 왼쪽
+    p.moveTo(midX, topY);
+
+    // 왼쪽 볼
+    p.cubicTo(0.38 * w, 0.12 * h, 0.10 * w, 0.26 * h, leftX, 0.50 * h);
+    // 왼쪽 아래에서 바닥 포인트
+    p.cubicTo(0.26 * w, 0.80 * h, 0.40 * w, 0.92 * h, midX, botY);
+    // 바닥에서 오른쪽 아래
+    p.cubicTo(0.60 * w, 0.92 * h, 0.74 * w, 0.80 * h, rightX, 0.50 * h);
+    // 오른쪽 볼 → 위 중앙 복귀
+    p.cubicTo(0.90 * w, 0.26 * h, 0.62 * w, 0.12 * h, midX, topY);
     p.close();
     return p;
   }
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = _heartPath(size);
+    final heart = _heartPath(size);
 
-    if (filledColors.isNotEmpty && totalSlots > 0) {
-      final step = 1.0 / totalSlots;
-      final stops = <double>[];
-      final colors = <Color>[];
+    // 하트 내부만 그리기
+    canvas.save();
+    canvas.clipPath(heart);
 
-      for (int i = 0; i < filledColors.length; i++) {
-        final start = (step * i).clamp(0.0, 1.0);
-        final end = (step * (i + 1)).clamp(0.0, 1.0);
-        colors.add(filledColors[i]);
-        colors.add(filledColors[i]);
-        stops.add(start);
-        stops.add(end);
+    final m = totalSlots.clamp(0, filledColors.length);
+    if (m > 0) {
+      if (m == 1) {
+        // 한 명 → 단색 꽉 채움
+        final paint = Paint()
+          ..color = filledColors.first
+          ..style = PaintingStyle.fill;
+        canvas.drawRect(Offset.zero & size, paint);
+      } else {
+        // m명 → 정확히 m등분 (좌/우 반반부터 시작)
+        final sweep = 2 * 3.141592653589793 / m;
+        final start0 = -3.141592653589793; // ⬅️ 왼쪽(9시)에서 시작 → 2명이면 좌/우 반반
+        final b = heart.getBounds();
+        final cx = b.center.dx, cy = b.center.dy;
+        final r = (b.longestSide) * 0.80;
+        final rect = Rect.fromCircle(center: Offset(cx, cy), radius: r);
+
+        for (int i = 0; i < m; i++) {
+          final paint = Paint()
+            ..color = filledColors[i]
+            ..style = PaintingStyle.fill;
+          canvas.drawArc(rect, start0 + i * sweep, sweep, true, paint);
+        }
       }
-      if (filledColors.length < totalSlots) {
-        colors.add(Colors.transparent);
-        colors.add(Colors.transparent);
-        stops.add(step * filledColors.length);
-        stops.add(1.0);
-      }
-
-      final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-      final shader = SweepGradient(
-        startAngle: -pi / 2,
-        endAngle: 3 * pi / 2,
-        colors: colors,
-        stops: stops,
-      ).createShader(rect);
-
-      final fillPaint = Paint()
-        ..shader = shader
-        ..style = PaintingStyle.fill;
-
-      canvas.save();
-      canvas.clipPath(path);
-      canvas.drawRect(rect, fillPaint);
-      canvas.restore();
     }
+    canvas.restore();
 
-    final stroke = Paint()
+    // 외곽선(조금 얇게)
+    final border = Paint()
       ..color = outlineColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = size.shortestSide * 0.07
+      ..strokeWidth = (size.shortestSide * 0.08).clamp(1.0, 2.5)
       ..isAntiAlias = true;
-
-    canvas.drawPath(path, stroke);
+    canvas.drawPath(heart, border);
   }
 
   @override
   bool shouldRepaint(covariant _HeartPainter old) {
-    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor) return true;
+    if (totalSlots != old.totalSlots) return true;
+    if (outlineColor != old.outlineColor) return true;
     if (filledColors.length != old.filledColors.length) return true;
     for (var i = 0; i < filledColors.length; i++) {
       if (filledColors[i].value != old.filledColors[i].value) return true;

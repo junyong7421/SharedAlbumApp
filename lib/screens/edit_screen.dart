@@ -29,7 +29,7 @@ Color colorForUid(
 
 // ===================== SegmentedHeart (분할 채우는 하트) =====================
 class SegmentedHeart extends StatelessWidget {
-  final int totalSlots;           // m명이면 m
+  final int totalSlots; // m명이면 m
   final List<Color> filledColors; // 길이=m
   final double size;
   final bool isLikedByMe;
@@ -53,7 +53,9 @@ class SegmentedHeart extends StatelessWidget {
         painter: _HeartPainter(
           totalSlots: totalSlots,
           filledColors: filledColors,
-          outlineColor: isLikedByMe ? const Color(0xFF625F8C) : Colors.grey.shade400,
+          outlineColor: isLikedByMe
+              ? const Color(0xFF625F8C)
+              : Colors.grey.shade400,
         ),
       ),
     );
@@ -71,81 +73,91 @@ class _HeartPainter extends CustomPainter {
     required this.outlineColor,
   });
 
+  // 더 클래식한 하트(좌우 대칭, 위 볼 선명, 아래 포인트 뚜렷)
   Path _heartPath(Size s) {
     final w = s.width, h = s.height;
     final p = Path();
-    final top = Offset(w * 0.5, h * 0.28);
-    final leftCtrl1 = Offset(w * 0.15, h * 0.05);
-    final leftCtrl2 = Offset(w * 0.02, h * 0.35);
-    final left = Offset(w * 0.25, h * 0.58);
-    final rightCtrl1 = Offset(w * 0.98, h * 0.35);
-    final rightCtrl2 = Offset(w * 0.85, h * 0.05);
-    final right = Offset(w * 0.75, h * 0.58);
-    final bottom = Offset(w * 0.5, h * 0.95);
 
-    p.moveTo(top.dx, top.dy);
-    p.cubicTo(leftCtrl1.dx, leftCtrl1.dy, leftCtrl2.dx, leftCtrl2.dy, left.dx, left.dy);
-    p.cubicTo(w * 0.25, h * 0.80, w * 0.40, h * 0.88, bottom.dx, bottom.dy);
-    p.cubicTo(w * 0.60, h * 0.88, w * 0.75, h * 0.80, right.dx, right.dy);
-    p.cubicTo(rightCtrl2.dx, rightCtrl2.dy, rightCtrl1.dx, rightCtrl1.dy, top.dx, top.dy);
+    // 비율 고정(아이콘 사이즈 상관없이 동일 실루엣)
+    final topY = 0.28 * h;
+    final leftX = 0.22 * w;
+    final rightX = 0.78 * w;
+    final midX = 0.50 * w;
+    final botY = 0.94 * h;
+
+    p.moveTo(midX, topY);
+
+    // 왼쪽 볼
+    p.cubicTo(0.38 * w, 0.12 * h, 0.10 * w, 0.26 * h, leftX, 0.50 * h);
+    // 왼쪽 아래에서 바닥 포인트
+    p.cubicTo(0.26 * w, 0.80 * h, 0.40 * w, 0.92 * h, midX, botY);
+    // 바닥에서 오른쪽 아래
+    p.cubicTo(0.60 * w, 0.92 * h, 0.74 * w, 0.80 * h, rightX, 0.50 * h);
+    // 오른쪽 볼 → 위 중앙 복귀
+    p.cubicTo(0.90 * w, 0.26 * h, 0.62 * w, 0.12 * h, midX, topY);
     p.close();
     return p;
   }
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = _heartPath(size);
+    final heart = _heartPath(size);
 
-    if (filledColors.isNotEmpty && totalSlots > 0) {
-      final step = 1.0 / totalSlots;
-      final stops = <double>[];
-      final colors = <Color>[];
+    // [병합] 하트 내부만 채우도록 clip → 등분 Arc 채우기
+    canvas.save();
+    canvas.clipPath(heart);
 
-      for (int i = 0; i < filledColors.length; i++) {
-        final start = (step * i).clamp(0.0, 1.0);
-        final end = (step * (i + 1)).clamp(0.0, 1.0);
-        colors.add(filledColors[i]);
-        colors.add(filledColors[i]);
-        stops.add(start);
-        stops.add(end);
+    final m = totalSlots.clamp(0, filledColors.length);
+    if (m > 0) {
+      if (m == 1) {
+        // 한 명 → 단색 꽉 채움
+        final paint = Paint()
+          ..color = filledColors.first
+          ..style = PaintingStyle.fill;
+        canvas.drawRect(Offset.zero & size, paint);
+      } else {
+        // m명 → 정확히 m등분 (2명이면 좌/우 반반)
+        const pi = 3.141592653589793;
+        final sweep = 2 * pi / m;
+        final start0 = -pi; // 왼쪽(9시)에서 시작
+        final b = heart.getBounds();
+        final cx = b.center.dx, cy = b.center.dy;
+        final r = (b.longestSide) * 0.80;
+        final rect = Rect.fromCircle(center: Offset(cx, cy), radius: r);
+
+        for (int i = 0; i < m; i++) {
+          final paint = Paint()
+            ..color = filledColors[i]
+            ..style = PaintingStyle.fill;
+          canvas.drawArc(rect, start0 + i * sweep, sweep, true, paint);
+        }
       }
-
-      final rect = Rect.fromLTWH(0, 0, size.width, size.height);
-      final shader = SweepGradient(
-        startAngle: -3.14159 / 2,
-        endAngle: 3 * 3.14159 / 2,
-        colors: colors,
-        stops: stops,
-      ).createShader(rect);
-
-      final fillPaint = Paint()
-        ..shader = shader
-        ..style = PaintingStyle.fill;
-
-      canvas.save();
-      canvas.clipPath(path);
-      canvas.drawRect(rect, fillPaint);
-      canvas.restore();
     }
 
-    final stroke = Paint()
+    canvas.restore();
+
+    // 외곽선(조금 얇게)
+    final border = Paint()
       ..color = outlineColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = size.shortestSide * 0.07
+      ..strokeWidth = (size.shortestSide * 0.08).clamp(1.0, 2.5)
       ..isAntiAlias = true;
-
-    canvas.drawPath(path, stroke);
+    canvas.drawPath(heart, border);
   }
 
   @override
-  bool shouldRepaint(covariant _HeartPainter old) {
-    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor) return true;
-    if (filledColors.length != old.filledColors.length) return true;
-    for (var i = 0; i < filledColors.length; i++) {
-      if (filledColors[i].value != old.filledColors[i].value) return true;
-    }
-    return false;
-  }
+  bool shouldRepaint(covariant _HeartPainter old) =>
+      old.totalSlots != totalSlots ||
+      old.outlineColor != outlineColor ||
+      old.filledColors.length != filledColors.length ||
+      List.generate(
+            filledColors.length,
+            (i) => filledColors[i].value,
+          ).toString() !=
+          List.generate(
+            old.filledColors.length,
+            (i) => old.filledColors[i].value,
+          ).toString();
 }
 
 // ===================== HeartForPhoto (좋아요 하트: photoId 기준) =====================
@@ -210,9 +222,9 @@ class HeartForPhoto extends StatelessWidget {
                 like: !isLikedByMe,
               );
             } catch (e) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('좋아요 실패: $e')),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
             }
           },
         );
@@ -262,9 +274,14 @@ class _EditScreenState extends State<EditScreen> {
 
     // 4) users/{uid} 조회
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
       final data = doc.data();
-      final dn = (data?['displayName'] ?? data?['name'] ?? '').toString().trim();
+      final dn = (data?['displayName'] ?? data?['name'] ?? '')
+          .toString()
+          .trim();
       if (dn.isNotEmpty) return _nameCache[uid] = dn;
     } catch (_) {}
 
@@ -275,15 +292,16 @@ class _EditScreenState extends State<EditScreen> {
 
   // 처음 들어간(lead) 편집자 고르기: startedAt → updatedAt → uid 안정 정렬
   EditingInfo _pickLeadEditor(List<EditingInfo> editors) {
-    final sorted = [...editors]..sort((a, b) {
-      final sa = a.startedAt ?? a.updatedAt;
-      final sb = b.startedAt ?? b.updatedAt;
-      if (sa != null && sb != null) {
-        final cmp = sa.compareTo(sb); // 오래된(먼저 들어간) 순
-        if (cmp != 0) return cmp;
-      }
-      return (a.uid ?? '').compareTo(b.uid ?? '');
-    });
+    final sorted = [...editors]
+      ..sort((a, b) {
+        final sa = a.startedAt ?? a.updatedAt;
+        final sb = b.startedAt ?? b.updatedAt;
+        if (sa != null && sb != null) {
+          final cmp = sa.compareTo(sb); // 오래된(먼저 들어간) 순
+          if (cmp != 0) return cmp;
+        }
+        return (a.uid ?? '').compareTo(b.uid ?? '');
+      });
     return sorted.first;
   }
 
@@ -299,11 +317,16 @@ class _EditScreenState extends State<EditScreen> {
     final prefer = (lead.userDisplayName ?? '').trim();
 
     return FutureBuilder<String>(
-      future: _displayNameFor(leadUid, prefer: prefer.isNotEmpty ? prefer : null),
+      future: _displayNameFor(
+        leadUid,
+        prefer: prefer.isNotEmpty ? prefer : null,
+      ),
       builder: (context, snap) {
         if (!snap.hasData) return const SizedBox.shrink();
         final leadName = snap.data!;
-        final text = (others <= 0) ? '$leadName 편집중..' : '$leadName 외 $others명 편집중..';
+        final text = (others <= 0)
+            ? '$leadName 편집중..'
+            : '$leadName 외 $others명 편집중..';
 
         // 화면 톤과 맞춘 칩 UI
         return Padding(
@@ -316,7 +339,11 @@ class _EditScreenState extends State<EditScreen> {
                 colors: [Color(0xFFFFF3CD), Color(0xFFFFE6A7)],
               ),
               boxShadow: const [
-                BoxShadow(color: Colors.black12, blurRadius: 3, offset: Offset(1,1)),
+                BoxShadow(
+                  color: Colors.black12,
+                  blurRadius: 3,
+                  offset: Offset(1, 1),
+                ),
               ],
             ),
             child: Text(
@@ -365,11 +392,18 @@ class _EditScreenState extends State<EditScreen> {
                           ),
                           const Spacer(),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(16),
                               gradient: const LinearGradient(
-                                colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+                                colors: [
+                                  Color(0xFFC6DCFF),
+                                  Color(0xFFD2D1FF),
+                                  Color(0xFFF5CFFF),
+                                ],
                               ),
                             ),
                             child: Text(
@@ -394,21 +428,33 @@ class _EditScreenState extends State<EditScreen> {
                         onTap: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (context) => const EditAlbumListScreen()),
+                            MaterialPageRoute(
+                              builder: (context) => const EditAlbumListScreen(),
+                            ),
                           );
                         },
                         child: Container(
                           margin: const EdgeInsets.only(left: 24, bottom: 12),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 6,
+                          ),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(16),
                             gradient: const LinearGradient(
-                              colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+                              colors: [
+                                Color(0xFFC6DCFF),
+                                Color(0xFFD2D1FF),
+                                Color(0xFFF5CFFF),
+                              ],
                             ),
                           ),
                           child: const Text(
                             '편집 목록',
-                            style: TextStyle(color: Color(0xFFF6F9FF), fontWeight: FontWeight.bold),
+                            style: TextStyle(
+                              color: Color(0xFFF6F9FF),
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),
@@ -416,20 +462,34 @@ class _EditScreenState extends State<EditScreen> {
 
                     // 편집 중인 사진 라벨
                     Padding(
-                      padding: const EdgeInsets.only(left: 24, right: 24, bottom: 8),
+                      padding: const EdgeInsets.only(
+                        left: 24,
+                        right: 24,
+                        bottom: 8,
+                      ),
                       child: Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 6,
+                            ),
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(16),
                               gradient: const LinearGradient(
-                                colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+                                colors: [
+                                  Color(0xFFC6DCFF),
+                                  Color(0xFFD2D1FF),
+                                  Color(0xFFF5CFFF),
+                                ],
                               ),
                             ),
                             child: const Text(
                               '편집 중인 사진',
-                              style: TextStyle(color: Color(0xFFF6F9FF), fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                color: Color(0xFFF6F9FF),
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                           const Spacer(),
@@ -442,11 +502,14 @@ class _EditScreenState extends State<EditScreen> {
                     StreamBuilder<List<EditingInfo>>(
                       stream: _svc.watchEditingForAlbum(widget.albumId),
                       builder: (context, snap) {
-                        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+                        if (snap.connectionState == ConnectionState.waiting &&
+                            !snap.hasData) {
                           return const Center(
                             child: Padding(
                               padding: EdgeInsets.symmetric(vertical: 40),
-                              child: CircularProgressIndicator(color: Color(0xFF625F8C)),
+                              child: CircularProgressIndicator(
+                                color: Color(0xFF625F8C),
+                              ),
                             ),
                           );
                         }
@@ -457,7 +520,9 @@ class _EditScreenState extends State<EditScreen> {
                               child: Text(
                                 '편집 세션을 불러오지 못했습니다.\n${snap.error}',
                                 textAlign: TextAlign.center,
-                                style: const TextStyle(color: Color(0xFF625F8C)),
+                                style: const TextStyle(
+                                  color: Color(0xFF625F8C),
+                                ),
                               ),
                             ),
                           );
@@ -466,11 +531,17 @@ class _EditScreenState extends State<EditScreen> {
                         final raw = snap.data ?? const <EditingInfo>[];
 
                         // URL 없는 항목 제거 + 같은 사진 중복 제거 (photoId/editedId/originalPhotoId 기준)
-                        final filtered = raw.where((e) => (e.photoUrl).trim().isNotEmpty).toList();
+                        final filtered = raw
+                            .where((e) => (e.photoUrl).trim().isNotEmpty)
+                            .toList();
                         final seen = <String>{};
                         final list = <EditingInfo>[];
                         for (final e in filtered) {
-                          final k = (e.photoId ?? e.editedId ?? e.originalPhotoId ?? '');
+                          final k =
+                              (e.photoId ??
+                              e.editedId ??
+                              e.originalPhotoId ??
+                              '');
                           if (k.isEmpty) continue;
                           if (seen.add(k)) list.add(e);
                         }
@@ -484,10 +555,13 @@ class _EditScreenState extends State<EditScreen> {
                           _currentIndex = 0;
                         }
 
-                        final EditingInfo? current = hasImages ? list[_currentIndex] : null;
+                        final EditingInfo? current = hasImages
+                            ? list[_currentIndex]
+                            : null;
                         final String? url = current?.photoUrl;
                         final String? photoId = current?.photoId;
-                        final String? originalPhotoId = current?.originalPhotoId;
+                        final String? originalPhotoId =
+                            current?.originalPhotoId;
 
                         // 이미지 키 (캐시 무시용)
                         final String imageKey = [
@@ -497,12 +571,16 @@ class _EditScreenState extends State<EditScreen> {
                           current?.originalPhotoId ?? '',
                           current?.photoId ?? '',
                           current?.photoUrl ?? '',
-                          (current?.updatedAt?.millisecondsSinceEpoch ?? 0).toString(),
+                          (current?.updatedAt?.millisecondsSinceEpoch ?? 0)
+                              .toString(),
                         ].join('_');
 
                         // 좋아요 타깃: 원본 우선
                         final String? likeTargetPhotoId =
-                            (originalPhotoId != null && originalPhotoId.isNotEmpty) ? originalPhotoId : photoId;
+                            (originalPhotoId != null &&
+                                originalPhotoId.isNotEmpty)
+                            ? originalPhotoId
+                            : photoId;
 
                         // 현재 프리뷰와 같은 대상의 편집자들 추출
                         List<EditingInfo> currentEditors = const [];
@@ -516,9 +594,12 @@ class _EditScreenState extends State<EditScreen> {
                             final ePhoto = (e.photoId ?? '').trim();
                             final eEdited = (e.editedId ?? '').trim();
 
-                            if (keyOrig.isNotEmpty) return eOrig == keyOrig || ePhoto == keyOrig;
-                            if (keyPhoto.isNotEmpty) return ePhoto == keyPhoto || eOrig == keyPhoto;
-                            if (keyEdited.isNotEmpty) return eEdited == keyEdited;
+                            if (keyOrig.isNotEmpty)
+                              return eOrig == keyOrig || ePhoto == keyOrig;
+                            if (keyPhoto.isNotEmpty)
+                              return ePhoto == keyPhoto || eOrig == keyPhoto;
+                            if (keyEdited.isNotEmpty)
+                              return eEdited == keyEdited;
                             return false;
                           }).toList();
                         }
@@ -532,8 +613,10 @@ class _EditScreenState extends State<EditScreen> {
                                 icon: const Icon(Icons.arrow_left, size: 32),
                                 onPressed: hasImages
                                     ? () => setState(() {
-                                          _currentIndex = (_currentIndex - 1 + list.length) % list.length;
-                                        })
+                                        _currentIndex =
+                                            (_currentIndex - 1 + list.length) %
+                                            list.length;
+                                      })
                                     : null,
                                 color: hasImages ? null : Colors.black26,
                               ),
@@ -547,15 +630,23 @@ class _EditScreenState extends State<EditScreen> {
                                             if (_isNavigating) return;
                                             _isNavigating = true;
 
-                                            final String? _editedId = current?.editedId;
-                                            final String? _originalPhotoId = current?.originalPhotoId;
+                                            final String? _editedId =
+                                                current?.editedId;
+                                            final String? _originalPhotoId =
+                                                current?.originalPhotoId;
                                             final String? _photoId = photoId;
                                             final String? _url = url;
 
                                             if (_url == null || _url.isEmpty) {
                                               _isNavigating = false;
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                const SnackBar(content: Text('이미지 URL이 유효하지 않습니다.')),
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    '이미지 URL이 유효하지 않습니다.',
+                                                  ),
+                                                ),
                                               );
                                               return;
                                             }
@@ -564,19 +655,32 @@ class _EditScreenState extends State<EditScreen> {
                                               await _svc.setEditing(
                                                 uid: _uid,
                                                 albumId: widget.albumId,
-                                                photoId: _originalPhotoId ?? _photoId,
+                                                photoId:
+                                                    _originalPhotoId ??
+                                                    _photoId,
                                                 photoUrl: _url,
-                                                source: (_editedId ?? '').isNotEmpty ? 'edited' : 'original',
+                                                source:
+                                                    (_editedId ?? '').isNotEmpty
+                                                    ? 'edited'
+                                                    : 'original',
                                                 editedId: _editedId,
-                                                originalPhotoId: _originalPhotoId ?? _photoId,
+                                                originalPhotoId:
+                                                    _originalPhotoId ??
+                                                    _photoId,
                                                 // 👇 이름 저장
                                                 userDisplayName: _meName,
                                               );
                                             } catch (e) {
                                               _isNavigating = false;
                                               if (!mounted) return;
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                SnackBar(content: Text('편집 세션 생성 실패: $e')),
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    '편집 세션 생성 실패: $e',
+                                                  ),
+                                                ),
                                               );
                                               return;
                                             }
@@ -589,14 +693,17 @@ class _EditScreenState extends State<EditScreen> {
                                             await Navigator.push(
                                               context,
                                               MaterialPageRoute(
-                                                builder: (context) => EditViewScreen(
-                                                  albumName: widget.albumName,
-                                                  albumId: widget.albumId,
-                                                  imagePath: _url,
-                                                  editedId: _editedId,
-                                                  originalPhotoId: _originalPhotoId,
-                                                  photoId: _photoId,
-                                                ),
+                                                builder: (context) =>
+                                                    EditViewScreen(
+                                                      albumName:
+                                                          widget.albumName,
+                                                      albumId: widget.albumId,
+                                                      imagePath: _url,
+                                                      editedId: _editedId,
+                                                      originalPhotoId:
+                                                          _originalPhotoId,
+                                                      photoId: _photoId,
+                                                    ),
                                               ),
                                             );
 
@@ -611,7 +718,11 @@ class _EditScreenState extends State<EditScreen> {
                                         color: const Color(0xFFF6F9FF),
                                         borderRadius: BorderRadius.circular(20),
                                         boxShadow: const [
-                                          BoxShadow(color: Colors.black12, blurRadius: 5, offset: Offset(2, 2)),
+                                          BoxShadow(
+                                            color: Colors.black12,
+                                            blurRadius: 5,
+                                            offset: Offset(2, 2),
+                                          ),
                                         ],
                                       ),
                                       child: ClipRRect(
@@ -629,7 +740,8 @@ class _EditScreenState extends State<EditScreen> {
                                   ),
 
                                   // 하트 오버레이
-                                  if (likeTargetPhotoId != null && likeTargetPhotoId.isNotEmpty)
+                                  if (likeTargetPhotoId != null &&
+                                      likeTargetPhotoId.isNotEmpty)
                                     Positioned(
                                       top: -6,
                                       right: -6,
@@ -648,8 +760,9 @@ class _EditScreenState extends State<EditScreen> {
                                 icon: const Icon(Icons.arrow_right, size: 32),
                                 onPressed: hasImages
                                     ? () => setState(() {
-                                          _currentIndex = (_currentIndex + 1) % list.length;
-                                        })
+                                        _currentIndex =
+                                            (_currentIndex + 1) % list.length;
+                                      })
                                     : null,
                                 color: hasImages ? null : Colors.black26,
                               ),
@@ -670,17 +783,30 @@ class _EditScreenState extends State<EditScreen> {
                             Align(
                               alignment: Alignment.centerLeft,
                               child: Container(
-                                margin: const EdgeInsets.only(left: 24, bottom: 8),
-                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                                margin: const EdgeInsets.only(
+                                  left: 24,
+                                  bottom: 8,
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 6,
+                                ),
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(16),
                                   gradient: const LinearGradient(
-                                    colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+                                    colors: [
+                                      Color(0xFFC6DCFF),
+                                      Color(0xFFD2D1FF),
+                                      Color(0xFFF5CFFF),
+                                    ],
                                   ),
                                 ),
                                 child: const Text(
                                   '편집된 사진',
-                                  style: TextStyle(color: Color(0xFFF6F9FF), fontWeight: FontWeight.bold),
+                                  style: TextStyle(
+                                    color: Color(0xFFF6F9FF),
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ),
                             ),
@@ -695,15 +821,25 @@ class _EditScreenState extends State<EditScreen> {
                                   color: Colors.white,
                                   borderRadius: BorderRadius.circular(20),
                                   boxShadow: const [
-                                    BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(2, 2)),
+                                    BoxShadow(
+                                      color: Colors.black12,
+                                      blurRadius: 4,
+                                      offset: Offset(2, 2),
+                                    ),
                                   ],
                                 ),
                                 child: StreamBuilder<List<EditedPhoto>>(
-                                  stream: _svc.watchEditedPhotos(widget.albumId),
+                                  stream: _svc.watchEditedPhotos(
+                                    widget.albumId,
+                                  ),
                                   builder: (context, editedSnap) {
-                                    if (editedSnap.connectionState == ConnectionState.waiting && !editedSnap.hasData) {
+                                    if (editedSnap.connectionState ==
+                                            ConnectionState.waiting &&
+                                        !editedSnap.hasData) {
                                       return const Center(
-                                        child: CircularProgressIndicator(color: Color(0xFF625F8C)),
+                                        child: CircularProgressIndicator(
+                                          color: Color(0xFF625F8C),
+                                        ),
                                       );
                                     }
                                     if (editedSnap.hasError) {
@@ -713,27 +849,42 @@ class _EditScreenState extends State<EditScreen> {
                                           child: Text(
                                             '편집된 사진을 불러오는 중 오류가 발생했습니다.\n${editedSnap.error}',
                                             textAlign: TextAlign.center,
-                                            style: const TextStyle(color: Color(0xFF625F8C)),
+                                            style: const TextStyle(
+                                              color: Color(0xFF625F8C),
+                                            ),
                                           ),
                                         ),
                                       );
                                     }
 
-                                    final edited = editedSnap.data ?? const <EditedPhoto>[];
+                                    final edited =
+                                        editedSnap.data ??
+                                        const <EditedPhoto>[];
 
                                     // 편집 중인 editedId를 빼기 위해 세션 스트림과 합성
                                     return StreamBuilder<List<EditingInfo>>(
-                                      stream: _svc.watchEditingForAlbum(widget.albumId),
+                                      stream: _svc.watchEditingForAlbum(
+                                        widget.albumId,
+                                      ),
                                       builder: (context, sessSnap) {
-                                        final sessions = sessSnap.data ?? const <EditingInfo>[];
+                                        final sessions =
+                                            sessSnap.data ??
+                                            const <EditingInfo>[];
 
                                         final activeEditedIds = <String>{};
                                         for (final e in sessions) {
                                           final id = (e.editedId ?? '').trim();
-                                          if (id.isNotEmpty) activeEditedIds.add(id);
+                                          if (id.isNotEmpty)
+                                            activeEditedIds.add(id);
                                         }
 
-                                        final visible = edited.where((it) => !activeEditedIds.contains(it.id)).toList();
+                                        final visible = edited
+                                            .where(
+                                              (it) => !activeEditedIds.contains(
+                                                it.id,
+                                              ),
+                                            )
+                                            .toList();
 
                                         if (visible.isEmpty) {
                                           return const Center(
@@ -750,14 +901,18 @@ class _EditScreenState extends State<EditScreen> {
                                         return ListView.separated(
                                           scrollDirection: Axis.horizontal,
                                           padding: const EdgeInsets.all(12),
-                                          separatorBuilder: (_, __) => const SizedBox(width: 8),
+                                          separatorBuilder: (_, __) =>
+                                              const SizedBox(width: 8),
                                           itemCount: visible.length,
                                           itemBuilder: (_, i) {
                                             final it = visible[i];
-                                            final thumbKey = 'edited_${it.id}_${it.originalPhotoId ?? ''}_${it.url}';
+                                            final thumbKey =
+                                                'edited_${it.id}_${it.originalPhotoId ?? ''}_${it.url}';
 
                                             // 좋아요 타깃: 편집본은 원본 photoId가 있을 때만 표시
-                                            final likePhotoId = (it.originalPhotoId ?? '').isNotEmpty
+                                            final likePhotoId =
+                                                (it.originalPhotoId ?? '')
+                                                    .isNotEmpty
                                                 ? it.originalPhotoId!
                                                 : null;
 
@@ -765,9 +920,16 @@ class _EditScreenState extends State<EditScreen> {
                                               clipBehavior: Clip.none,
                                               children: [
                                                 GestureDetector(
-                                                  onTap: () => _showEditedActions(context, it),
+                                                  onTap: () =>
+                                                      _showEditedActions(
+                                                        context,
+                                                        it,
+                                                      ),
                                                   child: ClipRRect(
-                                                    borderRadius: BorderRadius.circular(12),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          12,
+                                                        ),
                                                     child: Image.network(
                                                       it.url,
                                                       width: 100,
@@ -832,7 +994,10 @@ class _EditScreenState extends State<EditScreen> {
       child: const Center(
         child: Text(
           '편집 중인 사진 없음',
-          style: TextStyle(color: Color(0xFF625F8C), fontWeight: FontWeight.w600),
+          style: TextStyle(
+            color: Color(0xFF625F8C),
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
     );
@@ -864,7 +1029,9 @@ class _EditScreenState extends State<EditScreen> {
                       uid: _uid,
                       albumId: widget.albumId,
                       // 편집본 열 때도 photoId를 원본 id로 채움 → 집계 일관성
-                      photoId: (item.originalPhotoId ?? '').isNotEmpty ? item.originalPhotoId : null,
+                      photoId: (item.originalPhotoId ?? '').isNotEmpty
+                          ? item.originalPhotoId
+                          : null,
                       photoUrl: item.url,
                       source: 'edited',
                       editedId: item.id,
@@ -877,9 +1044,9 @@ class _EditScreenState extends State<EditScreen> {
                   } catch (e) {
                     _isNavigating = false;
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('편집 세션 생성 실패: $e')),
-                    );
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('편집 세션 생성 실패: $e')));
                     return;
                   }
 
@@ -914,12 +1081,14 @@ class _EditScreenState extends State<EditScreen> {
                       editedId: item.id,
                     );
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(const SnackBar(content: Text('편집된 사진을 삭제했습니다.')));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('편집된 사진을 삭제했습니다.')),
+                    );
                   } catch (e) {
                     if (!mounted) return;
-                    ScaffoldMessenger.of(context)
-                        .showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
                   }
                 },
               ),
