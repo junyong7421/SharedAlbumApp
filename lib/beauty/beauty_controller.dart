@@ -1,3 +1,5 @@
+//beauty_controller.dart
+
 // lib/beauty/beauty_controller.dart
 import 'dart:typed_data';
 import 'dart:ui';
@@ -89,7 +91,7 @@ Future<Uint8List> _apply(_Job j, {BeautyParams? prev}) async {
       .map((p) => Offset(p.dx * width, p.dy * height))
       .toList();
 
-  // 기본 기하
+  // ===== 기본 기하 =====
   double minX = width.toDouble(), minY = height.toDouble(), maxX = 0, maxY = 0;
   for (final p in ptsImg) {
     if (p.dx < minX) minX = p.dx;
@@ -106,33 +108,19 @@ Future<Uint8List> _apply(_Job j, {BeautyParams? prev}) async {
     return Offset(sx / idx.length, sy / idx.length);
   }
 
-  final lc = _center(leftEyeRing);
-  final rc = _center(rightEyeRing);
   final faceCenter = Offset((minX + maxX) / 2, (minY + maxY) / 2);
-  final faceW = (maxX - minX);
-  final faceH = (maxY - minY);
+  final faceW = (maxX - minX), faceH = (maxY - minY);
 
-  // ── Δ(변경량) 계산: '이전값'이 없으면 0으로 간주
+  // ===== Δ(변경량) =====
   final prevP = prev ?? BeautyParams();
-  final dSkin = j.params.skinTone - prevP.skinTone;
   final dEye = j.params.eyeTail - prevP.eyeTail;
   final dNose = j.params.noseAmount - prevP.noseAmount;
   final dSat = j.params.lipSatGain - prevP.lipSatGain;
   final dInt = j.params.lipIntensity - prevP.lipIntensity;
   final dHue = j.params.hueShift - prevP.hueShift;
+  final dSkin = j.params.skinTone - prevP.skinTone; // 0.0 → 진짜 원본
 
-  // 변경이 전혀 없으면 그대로 반환(중복 적용 방지)
-  const eps = 1e-4;
-  if (dSkin.abs() <= eps &&
-      dEye.abs() <= eps &&
-      dNose.abs() <= eps &&
-      dSat.abs() <= eps &&
-      dInt.abs() <= eps &&
-      dHue.abs() <= eps) {
-    return j.srcPng;
-  }
-
-  // ── 1) 마스크 (얼굴 타원 - 입술 - 눈 링) + 이마 보강(forehead cap)
+  // ===== 마스크(오벌/입/눈) =====
   final faceOvalPath = polyPathFrom(ptsImg, faceOval);
   final lipOuterPath = polyPathFrom(ptsImg, lipsOuter);
   final lipInnerPath = polyPathFrom(ptsImg, lipsInner);
@@ -141,47 +129,135 @@ Future<Uint8List> _apply(_Job j, {BeautyParams? prev}) async {
     lipOuterPath,
     lipInnerPath,
   );
-
   final leftEyePath = polyPathFrom(ptsImg, leftEyeRing);
   final rightEyePath = polyPathFrom(ptsImg, rightEyeRing);
   final eyesPath = Path()
     ..addPath(leftEyePath, Offset.zero)
     ..addPath(rightEyePath, Offset.zero);
 
-  var skinPath = Path.combine(PathOperation.difference, faceOvalPath, lipPath);
-  skinPath = Path.combine(PathOperation.difference, skinPath, eyesPath);
-
-  // ▶ 이마 보강: 타원을 위/세로로 살짝 키운 뒤 상반부만 union
-  final expanded = Path()
+  // 오벌 확장(이마 여유)
+  final expandedOval = Path()
     ..addPath(
       faceOvalPath,
       Offset.zero,
-      matrix4: _scaleAbout(faceCenter, 1.07, 1.12),
-    );
+      matrix4: _scaleAbout(faceCenter, 1.06, 1.36),
+    ); // ★ 1.14 → 1.36
+
+  // (A) 이마 상단 밴드(더 위로/더 두껍게)
   final upperBand = Rect.fromLTWH(
-    minX - faceW * 0.10, // 좌우 여유
-    minY - faceH * 0.18, // 위로 확장
-    faceW * 1.20,
-    faceH * 0.58, // 상반부
+    minX - faceW * 0.05,
+    minY - faceH * 0.22, // ★ -0.12 → -0.22
+    faceW * 1.10,
+    faceH * 0.52, // ★ 0.38 → 0.52
   );
-  final foreheadCap = Path.combine(
+  final foreheadCapA = Path.combine(
     PathOperation.intersect,
-    expanded,
+    expandedOval,
     Path()..addRect(upperBand),
   );
-  skinPath = Path.combine(PathOperation.union, skinPath, foreheadCap);
 
-  // 래스터화 & 가장자리 보정
+  // (B) 이마 돔
+  Offset _ptSafe(int idx, Offset fb) =>
+      (idx >= 0 && idx < ptsImg.length) ? ptsImg[idx] : fb;
+  final leftTemple = _ptSafe(
+    127,
+    Offset(minX + faceW * 0.18, minY + faceH * 0.22),
+  );
+  final rightTemple = _ptSafe(
+    356,
+    Offset(maxX - faceW * 0.18, minY + faceH * 0.22),
+  );
+  final topForehead = _ptSafe(10, Offset(faceCenter.dx, minY + faceH * 0.07));
+
+  final domeThickness = faceH * 0.20; // ★ 0.16 → 0.20
+  final domeCtrlLift = faceH * 0.08; // ★ 0.06 → 0.08
+
+  final dome = Path()
+    ..moveTo(leftTemple.dx, leftTemple.dy)
+    ..quadraticBezierTo(
+      topForehead.dx,
+      topForehead.dy - domeCtrlLift,
+      rightTemple.dx,
+      rightTemple.dy,
+    )
+    ..lineTo(rightTemple.dx, rightTemple.dy + domeThickness)
+    ..quadraticBezierTo(
+      topForehead.dx,
+      minY + faceH * 0.18,
+      leftTemple.dx,
+      leftTemple.dy + domeThickness,
+    )
+    ..close();
+
+  // 돔 상한 클립(더 크게)
+  final outerClip = Path()
+    ..addPath(
+      faceOvalPath,
+      Offset.zero,
+      matrix4: _scaleAbout(faceCenter, 1.10, 1.42),
+    ); // ★ 1.28 → 1.42
+  final foreheadCapB = Path.combine(PathOperation.intersect, outerClip, dome);
+
+  // ---- 코어 스킨 경로 (입/눈 제외)
+  var skinCorePath = Path.combine(
+    PathOperation.union,
+    faceOvalPath,
+    foreheadCapA,
+  );
+  skinCorePath = Path.combine(PathOperation.union, skinCorePath, foreheadCapB);
+  skinCorePath = Path.combine(PathOperation.difference, skinCorePath, lipPath);
+  skinCorePath = Path.combine(PathOperation.difference, skinCorePath, eyesPath);
+
+  // ---- 이마 전용 경로 (입/눈 제외)
+  var foreheadOnlyPath = Path.combine(
+    PathOperation.union,
+    foreheadCapA,
+    foreheadCapB,
+  );
+  foreheadOnlyPath = Path.combine(
+    PathOperation.difference,
+    foreheadOnlyPath,
+    lipPath,
+  );
+  foreheadOnlyPath = Path.combine(
+    PathOperation.difference,
+    foreheadOnlyPath,
+    eyesPath,
+  );
+
+  // ===== 래스터화/형태학 =====
   var lipMaskAlpha = await rasterizeMask(j.imageSize, lipPath, feather: 1.2);
   lipMaskAlpha = dilateAlpha(lipMaskAlpha, width, height, 1);
   lipMaskAlpha = blurAlpha(lipMaskAlpha, width, height, 1);
 
-  var skinMaskAlpha = await rasterizeMask(j.imageSize, skinPath, feather: 1.2);
-  // 이마 쪽 확보를 위해 팽창 -> 블러 (침식 X)
-  skinMaskAlpha = dilateAlpha(skinMaskAlpha, width, height, 2);
-  skinMaskAlpha = blurAlpha(skinMaskAlpha, width, height, 1);
+  // 코어: 머리카락 억제. erosion 살짝만(2→1) 후 dilate
+  var skinCoreAlpha = await rasterizeMask(
+    j.imageSize,
+    skinCorePath,
+    feather: 1.4,
+  );
+  skinCoreAlpha = erodeAlpha(skinCoreAlpha, width, height, 1); // ★ 2 → 1
+  skinCoreAlpha = dilateAlpha(skinCoreAlpha, width, height, 1);
 
-  // ── 2) 워프(Δ만 적용) + 마스크 동기 워핑
+  // 이마: erosion 없이 확장만
+  var foreheadAlpha = await rasterizeMask(
+    j.imageSize,
+    foreheadOnlyPath,
+    feather: 1.8,
+  );
+  foreheadAlpha = dilateAlpha(foreheadAlpha, width, height, 2);
+
+  // 픽셀별 max 병합 + 경계 스무딩(줄무늬 제거용)
+  final merged = Uint8List.fromList(skinCoreAlpha);
+  for (int i = 0; i < merged.length; i++) {
+    final a = merged[i], b = foreheadAlpha[i];
+    merged[i] = a > b ? a : b;
+  }
+  // ★ 경계 매끈: 살짝 팽창 후 블러
+  var skinMaskAlpha = dilateAlpha(merged, width, height, 1);
+  skinMaskAlpha = blurAlpha(skinMaskAlpha, width, height, 2); // ★ 1 → 2
+
+  // ===== 워프(Δ만) + 마스크 동기 워핑 =====
   Uint8List cur = j.srcPng;
 
   if (dEye.abs() > 0.001) {
@@ -191,7 +267,7 @@ Future<Uint8List> _apply(_Job j, {BeautyParams? prev}) async {
       rightRing: rightEyeRing,
       ptsImg: ptsImg,
       faceCenter: faceCenter,
-      amount: dEye, // ✔ 변경량만
+      amount: dEye,
       width: width,
       height: height,
       skinMask: skinMaskAlpha,
@@ -210,15 +286,12 @@ Future<Uint8List> _apply(_Job j, {BeautyParams? prev}) async {
     return Offset(faceCenter.dx, minY + (maxY - minY) * 0.58);
   }
 
-  final noseC = _noseCenter();
-  final noseRadius = faceW * 0.18;
-
   if (dNose.abs() > 0.001) {
     final rz = await resizeRegionRadial(
       bytes: cur,
-      center: noseC,
-      radius: noseRadius,
-      amount: dNose.clamp(-1.0, 1.0), // ✔ 변경량만
+      center: _noseCenter(),
+      radius: faceW * 0.18,
+      amount: dNose.clamp(-1.0, 1.0),
       width: width,
       height: height,
       skinMask: skinMaskAlpha,
@@ -229,8 +302,8 @@ Future<Uint8List> _apply(_Job j, {BeautyParams? prev}) async {
     lipMaskAlpha = rz.lipMask ?? lipMaskAlpha;
   }
 
-  // ── 3) 색 보정(Δ만 적용)
-  if (dSkin.abs() > 0.001) {
+  // ===== 색 보정(Δ만 적용 → 0.0에서 즉시 원본) =====
+  if (dSkin.abs() > 1e-4) {
     cur = await toneUpSkin(
       bytes: cur,
       maskAlpha: skinMaskAlpha,
@@ -239,10 +312,7 @@ Future<Uint8List> _apply(_Job j, {BeautyParams? prev}) async {
       amount: dSkin,
     );
   }
-
   if (dSat.abs() > 0.001 || dHue.abs() > 0.001 || dInt.abs() > 0.001) {
-    // NOTE: 립은 완전한 역변환이 불가능하므로, Δ 기반 누적 방식을 사용.
-    // satGain/hueShift는 Δ만, intensity는 (prev+dInt)를 상한선으로 사용.
     cur = await tintLips(
       bytes: cur,
       lipMaskAlpha: lipMaskAlpha,

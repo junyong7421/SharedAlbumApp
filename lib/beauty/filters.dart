@@ -1,18 +1,22 @@
-// lib/beauty/filters.dart
-import 'dart:typed_data';
-import 'dart:ui' as ui;
-import 'dart:math' as math;
-
-import 'package:image/image.dart' as img;
-
-import 'package:image/image.dart' as img;
-// lib/beauty/filters.dart
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:math' as math;
 import 'package:image/image.dart' as img;
 
 // ---------- 공용 유틸 ----------
+
+double _smoothstep(double e0, double e1, double x) {
+  final t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+  return t * t * (3 - 2 * t);
+}
+
+double _softInRange(double x, double min, double max, double feather) {
+  if (x <= min - feather) return 0.0;
+  if (x >= max + feather) return 0.0;
+  if (x < min) return _smoothstep(min - feather, min, x); // 0→1
+  if (x > max) return 1.0 - _smoothstep(max, max + feather, x); // 1→0
+  return 1.0;
+}
 
 // 가장자리 안전 접근
 img.Pixel _getClamped(img.Image im, int x, int y) =>
@@ -170,7 +174,6 @@ Uint8List blurAlpha(Uint8List a, int w, int h, int radius) {
 }
 
 // ---------- 피부 톤업(블러 X) ----------
-
 Future<Uint8List> toneUpSkin({
   required Uint8List bytes,
   required Uint8List maskAlpha,
@@ -184,40 +187,44 @@ Future<Uint8List> toneUpSkin({
   if (src == null) return bytes;
 
   final out = src.clone();
-  final gain = amount.clamp(-1.0, 1.0);
-  int idx = 0;
 
+  // 대칭 계수 (가산형) — 필요시 미세 조정
+  const double kL = 0.22; // Lightness 변화량
+  const double kS = -0.08; // Saturation 변화량(밝게: 살짝 감소, 어둡게: 살짝 증가)
+
+  int idx = 0;
   for (int y = 0; y < height; y++) {
     for (int x = 0; x < width; x++, idx++) {
       final m = maskAlpha[idx] / 255.0;
-      if (m <= 0) continue;
+      if (m <= 0) {
+        // 마스크 밖은 그대로 복사
+        final p = src.getPixel(x, y);
+        out.setPixelRgba(x, y, p.r, p.g, p.b, p.a);
+        continue;
+      }
 
       final p = src.getPixel(x, y);
       double r = p.r / 255.0, g = p.g / 255.0, b = p.b / 255.0;
 
+      // RGB → HSL
       final hsl = _rgbToHsl(r, g, b);
       double h = hsl[0], s = hsl[1], l = hsl[2];
 
-      // 밝게/어둡게
-      const k = 0.22; // 최대 변화량
-      if (gain >= 0) {
-        l = (l + (1.0 - l) * k * gain).clamp(0.0, 1.0);
-        s = (s * (1.0 - 0.10 * gain)).clamp(0.0, 1.0); // 과포화 방지
-      } else {
-        final gAbs = -gain;
-        l = (l * (1.0 - k * gAbs)).clamp(0.0, 1.0);
-      }
+      // ★ 가산형/대칭 보정 (마스크 강도로 스케일)
+      final dl = kL * amount * m;
+      final ds = kS * amount * m;
 
+      l = (l + dl).clamp(0.0, 1.0);
+      s = (s + ds).clamp(0.0, 1.0);
+
+      // HSL → RGB
       final rgb = _hslToRgb(h, s, l);
       final rr = (rgb[0] * 255).round();
       final gg = (rgb[1] * 255).round();
       final bb = (rgb[2] * 255).round();
 
-      final a = (m * 1.0).clamp(0.0, 1.0);
-      final fr = ((1 - a) * p.r + a * rr).round();
-      final fg = ((1 - a) * p.g + a * gg).round();
-      final fb = ((1 - a) * p.b + a * bb).round();
-      out.setPixelRgba(x, y, fr, fg, fb, p.a);
+      // 블렌딩 없이 바로 기록(가산형이므로 누적/되돌리기 정확)
+      out.setPixelRgba(x, y, rr, gg, bb, p.a);
     }
   }
   return Uint8List.fromList(img.encodePng(out));
