@@ -71,60 +71,58 @@ class _ConfirmExitPopup extends StatelessWidget {
             const SizedBox(height: 12),
             const Text(
               '저장하지 않고 나가시겠습니까?',
-              style: TextStyle(
-                fontSize: 14,
-                color: Color(0xFF625F8C),
-              ),
+              style: TextStyle(fontSize: 14, color: Color(0xFF625F8C)),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 28),
 
             // 버튼 영역
             // 버튼 영역 (Stack 제거 → Column으로)
-SizedBox(
-  height: 92, // 전체 버튼 영역 높이 (원하면 84~100 사이로 조절)
-  child: Column(
-    children: [
-      // 위쪽: 저장 안 함 / 저장 (가운데 정렬)
-      Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          _GradientButton(
-            label: '저장 안 함',
-            onTap: () => Navigator.pop(context, 'discard'),
-            width: 116,
-            height: 40,
-          ),
-          const SizedBox(width: 45), // 두 버튼 간 간격
-          _GradientButton(
-            label: '저장',
-            onTap: () => Navigator.pop(context, 'save'),
-            width: 96,
-            height: 40,
-          ),
-        ],
-      ),
+            SizedBox(
+              height: 92, // 전체 버튼 영역 높이 (원하면 84~100 사이로 조절)
+              child: Column(
+                children: [
+                  // 위쪽: 저장 안 함 / 저장 (가운데 정렬)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _GradientButton(
+                        label: '저장 안 함',
+                        onTap: () => Navigator.pop(context, 'discard'),
+                        width: 116,
+                        height: 40,
+                      ),
+                      const SizedBox(width: 45), // 두 버튼 간 간격
+                      _GradientButton(
+                        label: '저장',
+                        onTap: () => Navigator.pop(context, 'save'),
+                        width: 96,
+                        height: 40,
+                      ),
+                    ],
+                  ),
 
-      const Spacer(), // 아래로 공간 밀어냄
-
-      // 아래: 취소 (좌측 하단 고정, 작게)
-      Align(
-        alignment: Alignment.bottomLeft,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 8, bottom: 4), // 가장자리 여백
-          child: _GradientButton(
-            label: '취소',
-            onTap: () => Navigator.pop(context, 'cancel'),
-            width: 60,   // 반 사이즈
-            height: 28,  // 반 사이즈
-            fontSize: 12,
-          ),
-        ),
-      ),
-    ],
-  ),
-),
-
+                  const Spacer(), // 아래로 공간 밀어냄
+                  // 아래: 취소 (좌측 하단 고정, 작게)
+                  Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(
+                        left: 8,
+                        bottom: 4,
+                      ), // 가장자리 여백
+                      child: _GradientButton(
+                        label: '취소',
+                        onTap: () => Navigator.pop(context, 'cancel'),
+                        width: 60, // 반 사이즈
+                        height: 28, // 반 사이즈
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -182,8 +180,10 @@ class _GradientButton extends StatelessWidget {
   }
 }
 
-
 class _EditViewScreenState extends State<EditViewScreen> {
+  // **[추가]** 편집중 배지 표시 여부 (기본: 끔) -> 표시할거면 true로
+  static const bool _kShowEditorsBadge = false;
+
   // ▼ 4개 툴 전환: 0=자르기, 1=얼굴보정, 2=밝기, 3=회전/반전
   int _selectedTool = -1; // 0=자르기,1=얼굴보정,2=밝기,3=회전/반전
   Rect? _cropRectStage;
@@ -917,29 +917,29 @@ class _EditViewScreenState extends State<EditViewScreen> {
     }
 
     // 마지막 편집자면 커스텀 디자인 팝업
-final result = await showDialog<String>(
-  context: context,
-  barrierDismissible: false,
-  builder: (ctx) => const _ConfirmExitPopup(),
-);
+    final result = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const _ConfirmExitPopup(),
+    );
 
     switch (result) {
-  case 'save':
-    await _onSave();
-    break;
-  case 'discard':
-    await _endSession();
-    if (widget.albumId != null && _targetKey != null) {
-      await _svc.tryCleanupOpsIfNoEditors(
-        albumId: widget.albumId!,
-        photoId: _targetKey!,
-      );
+      case 'save':
+        await _onSave();
+        break;
+      case 'discard':
+        await _endSession();
+        if (widget.albumId != null && _targetKey != null) {
+          await _svc.tryCleanupOpsIfNoEditors(
+            albumId: widget.albumId!,
+            photoId: _targetKey!,
+          );
+        }
+        if (mounted) Navigator.pop(context, {'status': 'discard'});
+        break;
+      default:
+        break;
     }
-    if (mounted) Navigator.pop(context, {'status': 'discard'});
-    break;
-  default:
-    break;
-}
   }
 
   Future<void> _handleBack() async {
@@ -1019,31 +1019,35 @@ final result = await showDialog<String>(
                         ),
                       ),
 
-                      // 실시간 “편집중” 배지
-                      if (widget.albumId != null && _targetKey != null)
+                      // **[변경]** 배지를 통째로 숨기고, 고정 높이만 유지(레이아웃 흔들림 방지)
+                      if (_kShowEditorsBadge &&
+                          widget.albumId != null &&
+                          _targetKey != null)
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16.0),
                           child: Align(
                             alignment: Alignment.centerLeft,
-                            child: StreamBuilder<List<_EditorPresence>>(
-                              stream: _watchEditorsForTargetRT(),
-                              builder: (context, snap) {
-                                final editors =
-                                    snap.data ?? const <_EditorPresence>[];
-                                if (editors.isEmpty) {
-                                  return const SizedBox(height: 0);
-                                }
-                                final first = editors.first;
-                                final others = editors.length - 1;
-                                final label = (others <= 0)
-                                    ? '${first.name} 편집중'
-                                    : '${first.name} 외 $others명 편집중';
-                                return _editingBadge(label);
-                              },
+                            child: SizedBox(
+                              height: 32, // 배지 자리 고정
+                              child: StreamBuilder<List<_EditorPresence>>(
+                                stream: _watchEditorsForTargetRT(),
+                                builder: (context, snap) {
+                                  final editors =
+                                      snap.data ?? const <_EditorPresence>[];
+                                  if (editors.isEmpty) return const SizedBox();
+                                  final first = editors.first;
+                                  final others = editors.length - 1;
+                                  final label = (others <= 0)
+                                      ? '${first.name} 편집중'
+                                      : '${first.name} 외 $others명 편집중';
+                                  return _editingBadge(label);
+                                },
+                              ),
                             ),
                           ),
-                        ),
-
+                        )
+                      else
+                        const SizedBox(height: 12), // **[추가]** 여백만 남겨서 화면 위치 고정
                       // 저장 버튼
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16.0),
