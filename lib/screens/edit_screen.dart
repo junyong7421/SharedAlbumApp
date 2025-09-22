@@ -2,12 +2,15 @@
 import 'package:cloud_firestore/cloud_firestore.dart'; // 하트용 단일 포토 문서 구독(유지)
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:math' as math; // math.pi, math.min 등
+import 'package:vector_math/vector_math_64.dart' as vmath; // Matrix4
 
 import 'edit_view_screen.dart';
 import 'edit_album_list_screen.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import '../services/shared_album_service.dart';
+import '../services/shared_album_list_service.dart'; // ✅ uid→이름 변환용
 
 // ===================== UID → 항상 같은 색 (안정 랜덤) =====================
 int _stableHash(String s) {
@@ -63,8 +66,8 @@ class SegmentedHeart extends StatelessWidget {
 }
 
 class _HeartPainter extends CustomPainter {
-  final int totalSlots;
-  final List<Color> filledColors;
+  final int totalSlots;           // m명이면 m
+  final List<Color> filledColors; // 길이=m
   final Color outlineColor;
 
   _HeartPainter({
@@ -73,57 +76,60 @@ class _HeartPainter extends CustomPainter {
     required this.outlineColor,
   });
 
-  // 더 클래식한 하트(좌우 대칭, 위 볼 선명, 아래 포인트 뚜렷)
-  Path _heartPath(Size s) {
-    final w = s.width, h = s.height;
+  // Material favorite(24x24)과 유사한 하트 Path
+  // *정확히 동일 좌표가 아니더라도 아이콘스러운 '진짜 하트' 실루엣입니다.
+  Path _materialLikeHeart24() {
     final p = Path();
-
-    // 비율 고정(아이콘 사이즈 상관없이 동일 실루엣)
-    final topY = 0.28 * h;
-    final leftX = 0.22 * w;
-    final rightX = 0.78 * w;
-    final midX = 0.50 * w;
-    final botY = 0.94 * h;
-
-    p.moveTo(midX, topY);
-
-    // 왼쪽 볼
-    p.cubicTo(0.38 * w, 0.12 * h, 0.10 * w, 0.26 * h, leftX, 0.50 * h);
-    // 왼쪽 아래에서 바닥 포인트
-    p.cubicTo(0.26 * w, 0.80 * h, 0.40 * w, 0.92 * h, midX, botY);
-    // 바닥에서 오른쪽 아래
-    p.cubicTo(0.60 * w, 0.92 * h, 0.74 * w, 0.80 * h, rightX, 0.50 * h);
-    // 오른쪽 볼 → 위 중앙 복귀
-    p.cubicTo(0.90 * w, 0.26 * h, 0.62 * w, 0.12 * h, midX, topY);
+    // 위 중앙에서 시작해 좌측 볼 → 바닥 포인트 → 우측 볼 → 위 중앙 폐합
+    p.moveTo(12.0, 6.0);
+    p.cubicTo(9.5, 3.5, 5.2, 4.0, 4.0, 7.6);
+    p.cubicTo(3.2, 10.0, 4.5, 12.7, 7.0, 14.9);
+    p.cubicTo(8.8, 16.5, 10.7, 18.0, 12.0, 19.1);
+    p.cubicTo(13.3, 18.0, 15.2, 16.5, 17.0, 14.9);
+    p.cubicTo(19.5, 12.7, 20.8, 10.0, 20.0, 7.6);
+    p.cubicTo(18.8, 4.0, 14.5, 3.5, 12.0, 6.0);
     p.close();
     return p;
+  }
+
+  // 화면 size에 맞게 24x24 벡터를 스케일 & 센터링
+  Path _heartPath(Size s) {
+    final base = _materialLikeHeart24();
+    const vbW = 24.0, vbH = 24.0;
+    final scale = math.min(s.width / vbW, s.height / vbH);
+    final dx = (s.width - vbW * scale) / 2.0;
+    final dy = (s.height - vbH * scale) / 2.0;
+
+    final m = vmath.Matrix4.identity()
+      ..translate(dx, dy)
+      ..scale(scale, scale);
+    return base.transform(m.storage);
   }
 
   @override
   void paint(Canvas canvas, Size size) {
     final heart = _heartPath(size);
 
-    // [병합] 하트 내부만 채우도록 clip → 등분 Arc 채우기
+    // 1) 하트 내부만 그리도록 clip
     canvas.save();
     canvas.clipPath(heart);
 
+    // 2) 채우기 (한 명이면 단색, m명이면 m등분)
     final m = totalSlots.clamp(0, filledColors.length);
     if (m > 0) {
       if (m == 1) {
-        // 한 명 → 단색 꽉 채움
         final paint = Paint()
           ..color = filledColors.first
           ..style = PaintingStyle.fill;
         canvas.drawRect(Offset.zero & size, paint);
       } else {
-        // m명 → 정확히 m등분 (2명이면 좌/우 반반)
-        const pi = 3.141592653589793;
-        final sweep = 2 * pi / m;
-        final start0 = -pi; // 왼쪽(9시)에서 시작
+        // m등분: 2명이면 좌/우 반반이 보이도록 9시 방향(-π)부터 시작
+        final sweep = 2 * math.pi / m;
+        final start0 = -math.pi;
         final b = heart.getBounds();
-        final cx = b.center.dx, cy = b.center.dy;
-        final r = (b.longestSide) * 0.80;
-        final rect = Rect.fromCircle(center: Offset(cx, cy), radius: r);
+        final center = b.center;
+        final r = b.longestSide * 0.85; // 하트를 충분히 덮도록 반지름 여유
+        final rect = Rect.fromCircle(center: center, radius: r);
 
         for (int i = 0; i < m; i++) {
           final paint = Paint()
@@ -133,31 +139,27 @@ class _HeartPainter extends CustomPainter {
         }
       }
     }
-
     canvas.restore();
 
-    // 외곽선(조금 얇게)
+    // 3) 외곽선
     final border = Paint()
       ..color = outlineColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = (size.shortestSide * 0.08).clamp(1.0, 2.5)
+      ..strokeWidth = (size.shortestSide * 0.10).clamp(1.2, 3.0)
       ..isAntiAlias = true;
+
     canvas.drawPath(heart, border);
   }
 
   @override
-  bool shouldRepaint(covariant _HeartPainter old) =>
-      old.totalSlots != totalSlots ||
-      old.outlineColor != outlineColor ||
-      old.filledColors.length != filledColors.length ||
-      List.generate(
-            filledColors.length,
-            (i) => filledColors[i].value,
-          ).toString() !=
-          List.generate(
-            old.filledColors.length,
-            (i) => old.filledColors[i].value,
-          ).toString();
+  bool shouldRepaint(covariant _HeartPainter old) {
+    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor) return true;
+    if (filledColors.length != old.filledColors.length) return true;
+    for (var i = 0; i < filledColors.length; i++) {
+      if (filledColors[i].value != old.filledColors[i].value) return true;
+    }
+    return false;
+  }
 }
 
 // ===================== HeartForPhoto (좋아요 하트: photoId 기준) =====================
@@ -178,6 +180,22 @@ class HeartForPhoto extends StatelessWidget {
     required this.myUid,
   });
 
+  Future<void> _showLikedByPopup(BuildContext context, List<String> likedUids) async {
+    // 앨범 멤버 조회로 uid→이름 매핑
+    final members =
+        await SharedAlbumListService.instance.fetchAlbumMembers(albumId);
+    final names = members
+        .where((m) => likedUids.contains(m.uid))
+        .map((m) => (m.name).trim().isEmpty ? m.email : m.name)
+        .toList();
+
+    if (!context.mounted) return;
+    await showDialog(
+      context: context,
+      builder: (_) => LikedByPopup(memberNames: names),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final doc = FirebaseFirestore.instance
@@ -190,12 +208,15 @@ class HeartForPhoto extends StatelessWidget {
       stream: doc.snapshots(),
       builder: (context, snap) {
         if (!snap.hasData || !snap.data!.exists) {
-          return SegmentedHeart(
-            totalSlots: 0,
-            filledColors: const [],
+          // 하트만(빈 상태) + 숫자 0
+          return _HeartWithCount(
             size: size,
+            totalSlots: 0,
+            colors: const [],
             isLikedByMe: false,
-            onTap: () {},
+            count: 0,
+            onTapHeart: () {},
+            onTapCount: () {},
           );
         }
 
@@ -208,12 +229,13 @@ class HeartForPhoto extends StatelessWidget {
         final totalSlots = m == 0 ? 0 : (m > 12 ? 12 : m);
         final colors = likedUids.map((u) => colorForUid(u)).toList();
 
-        return SegmentedHeart(
-          totalSlots: totalSlots,
-          filledColors: colors.take(totalSlots).toList(),
+        return _HeartWithCount(
           size: size,
+          totalSlots: totalSlots,
+          colors: colors.take(totalSlots).toList(),
           isLikedByMe: isLikedByMe,
-          onTap: () async {
+          count: m,
+          onTapHeart: () async {
             try {
               await svc.toggleLike(
                 uid: myUid,
@@ -222,13 +244,180 @@ class HeartForPhoto extends StatelessWidget {
                 like: !isLikedByMe,
               );
             } catch (e) {
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
             }
           },
+          onTapCount: () => _showLikedByPopup(context, likedUids),
         );
       },
+    );
+  }
+}
+
+/// 하트 + 숫자 묶음 (Row)
+class _HeartWithCount extends StatelessWidget {
+  final double size;
+  final int totalSlots;
+  final List<Color> colors;
+  final bool isLikedByMe;
+  final int count;
+  final VoidCallback onTapHeart; // 하트 토글
+  final VoidCallback onTapCount; // 팝업 열기 (칩 전체)
+
+  const _HeartWithCount({
+    required this.size,
+    required this.totalSlots,
+    required this.colors,
+    required this.isLikedByMe,
+    required this.count,
+    required this.onTapHeart,
+    required this.onTapCount,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(14);
+
+    return Material(
+      color: Colors.white.withOpacity(0.90),
+      elevation: 0,
+      borderRadius: radius,
+      child: InkWell(
+        borderRadius: radius,
+        onTap: onTapCount, // ✅ 칩 전체 탭 → 팝업
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 28, minWidth: 44),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black12,
+                blurRadius: 3,
+                offset: Offset(1, 1),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 하트만 탭하면 좋아요 토글 (부모 onTap과 충돌 없이 동작)
+              SegmentedHeart(
+                totalSlots: totalSlots,
+                filledColors: colors,
+                size: size,
+                isLikedByMe: isLikedByMe,
+                onTap: onTapHeart,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '$count',
+                style: const TextStyle(
+                  color: Color(0xFF625F8C),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class LikedByPopup extends StatelessWidget {
+  final List<String> memberNames;
+
+  const LikedByPopup({super.key, required this.memberNames});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFFF6F9FF),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '하트 누른 사람',
+                style: TextStyle(
+                  color: Color(0xFF625F8C),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              Expanded(
+                child: memberNames.isEmpty
+                    ? const Center(
+                        child: Text(
+                          '아직 아무도 하트를 누르지 않았습니다.',
+                          style: TextStyle(color: Color(0xFF625F8C)),
+                        ),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        itemCount: memberNames.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 16),
+                        itemBuilder: (_, i) => _GradientPillButton(
+                          text: memberNames[i],
+                          onTap: () => Navigator.pop(context),
+                        ),
+                      ),
+              ),
+              const SizedBox(height: 8),
+
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: const _GradientPillButton(text: '닫기'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GradientPillButton extends StatelessWidget {
+  final String text;
+  final VoidCallback? onTap;
+  const _GradientPillButton({required this.text, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 18),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(150),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+          ),
+        ),
+        child: Text(
+          text,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+            fontSize: 16,
+          ),
+        ),
+      ),
     );
   }
 }

@@ -43,6 +43,146 @@ class EditViewScreen extends StatefulWidget {
   State<EditViewScreen> createState() => _EditViewScreenState();
 }
 
+class _ConfirmExitPopup extends StatelessWidget {
+  const _ConfirmExitPopup({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: const Color(0xFFF6F9FF),
+      shape: RoundedRectangleBorder(
+        side: const BorderSide(color: Color(0xFF625F8C), width: 2),
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              '편집이 저장되지 않았습니다',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF625F8C),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              '저장하지 않고 나가시겠습니까?',
+              style: TextStyle(
+                fontSize: 14,
+                color: Color(0xFF625F8C),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 28),
+
+            // 버튼 영역
+            // 버튼 영역 (Stack 제거 → Column으로)
+SizedBox(
+  height: 92, // 전체 버튼 영역 높이 (원하면 84~100 사이로 조절)
+  child: Column(
+    children: [
+      // 위쪽: 저장 안 함 / 저장 (가운데 정렬)
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _GradientButton(
+            label: '저장 안 함',
+            onTap: () => Navigator.pop(context, 'discard'),
+            width: 116,
+            height: 40,
+          ),
+          const SizedBox(width: 45), // 두 버튼 간 간격
+          _GradientButton(
+            label: '저장',
+            onTap: () => Navigator.pop(context, 'save'),
+            width: 96,
+            height: 40,
+          ),
+        ],
+      ),
+
+      const Spacer(), // 아래로 공간 밀어냄
+
+      // 아래: 취소 (좌측 하단 고정, 작게)
+      Align(
+        alignment: Alignment.bottomLeft,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 8, bottom: 4), // 가장자리 여백
+          child: _GradientButton(
+            label: '취소',
+            onTap: () => Navigator.pop(context, 'cancel'),
+            width: 60,   // 반 사이즈
+            height: 28,  // 반 사이즈
+            fontSize: 12,
+          ),
+        ),
+      ),
+    ],
+  ),
+),
+
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GradientButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  final double width;
+  final double height;
+  final double fontSize;
+
+  const _GradientButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.width = 100,
+    this.height = 40,
+    this.fontSize = 14,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black12,
+              blurRadius: 4,
+              offset: Offset(1, 1),
+            ),
+          ],
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: fontSize,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
 class _EditViewScreenState extends State<EditViewScreen> {
   // ▼ 4개 툴 전환: 0=자르기, 1=얼굴보정, 2=밝기, 3=회전/반전
   int _selectedTool = -1; // 0=자르기,1=얼굴보정,2=밝기,3=회전/반전
@@ -58,7 +198,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   // OPS에서 마지막으로 본 밝기 절대값(슬라이더/이미지 통일 기준)
   double _latestBrightnessValue = 0.0;
 
-  // 얼굴별 보정 파라미터 저장소
+  // 얼굴별 보정 파라미터 저장소 (동기화의 소스 오브 트루스)
   final Map<int, BeautyParams> _faceParams = {};
 
   // 얼굴보정 전용 Undo 스택 (적용할 때마다 push)
@@ -101,7 +241,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   bool _dimOthers = false;
 
   BeautyParams _beautyParams = BeautyParams();
-  Uint8List? _beautyBasePng; // 보정/저장용 결과
+  Uint8List? _beautyBasePng; // 보정/저장용 결과(결정적 베이스 PNG)
 
   // 얼굴 파라미터(deep copy)
   Map<int, BeautyParams> _cloneParams(Map<int, BeautyParams> src) {
@@ -177,7 +317,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return byteData!.buffer.asUint8List();
   }
 
-  // === 결정적 앵커 렌더 (원본 → 회전 → 반전 → 정규화 크롭)
+  // === 결정적 앵커 렌더 (원본 → 회전 → 반전 → 정규화 크롭) : 밝기
   Future<Uint8List> _renderBaseForBrightness() async {
     if (_originalBytes == null) await _loadOriginalBytes();
     Uint8List out = _originalBytes!;
@@ -188,6 +328,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
     if (_cropNorm != null) out = await _cropNormalizedBytes(out, _cropNorm!);
 
     return out;
+  }
+
+  // === 결정적 앵커 렌더 (원본 → 회전 → 반전 → 정규화 크롭 → PNG) : 얼굴보정
+  Future<Uint8List> _renderBaseForBeauty() async {
+    final base = await _renderBaseForBrightness();
+    // PNG 통일
+    final im = img.decodeImage(base);
+    if (im == null) throw StateError('이미지를 디코드할 수 없습니다.');
+    return Uint8List.fromList(img.encodePng(im));
   }
 
   // ===== PNG 캡처/업로드 =====
@@ -429,6 +578,58 @@ class _EditViewScreenState extends State<EditViewScreen> {
             _flipHState = !_flipHState;
           }
           await _reapplyBrightnessIfActive();
+          break;
+        }
+
+      // ===== 얼굴 보정 실시간 수신 =====
+      case 'beauty':
+        {
+          // 1) 파라미터 파싱
+          final faceIdx = (data['face'] as num?)?.toInt();
+          final paramsMap = (data['params'] as Map?)?.cast<String, dynamic>();
+          final prevMap = (data['prev'] as Map?)?.cast<String, dynamic>();
+          if (faceIdx == null || paramsMap == null) break;
+
+          final newParams = beautyParamsFromMap(paramsMap);
+          // ✅ prev 우선: 패널 오픈 당시 상대 기준(Δ 기준점)
+          final prevParams = prevMap != null
+              ? beautyParamsFromMap(prevMap)
+              : (_faceParams[faceIdx] ?? BeautyParams());
+
+          // 2) 랜드마크 보장
+          if (_faces468.isEmpty) {
+            await _runFaceDetect();
+            if (_faces468.isEmpty) break; // 여전히 없으면 안전 종료
+          }
+
+          // 3) 결정적 베이스 PNG 생성(원본→회전→반전→크롭→PNG)
+          final basePng = await _renderBaseForBeauty();
+
+          // 4) 원본 픽셀 사이즈
+          final imInfo = img.decodeImage(basePng);
+          if (imInfo == null) break;
+          final Size imgSize = Size(
+            imInfo.width.toDouble(),
+            imInfo.height.toDouble(),
+          );
+
+          // 5) 컨트롤러로 Δ만 적용(누적 보정 방지)
+          final ctrl = BeautyController();
+          final outBytes = await ctrl.applyAll(
+            srcPng: basePng,
+            faces468: _faces468,
+            selectedFace: faceIdx,
+            imageSize: imgSize,
+            params: newParams,
+            prevParams: prevParams, // ← Δ 적용 핵심
+          );
+
+          // 6) 결과/상태 반영
+          setState(() {
+            _editedBytes = outBytes;
+            _faceParams[faceIdx] = newParams; // 소스 오브 트루스 갱신
+            _dirty = true;
+          });
           break;
         }
     }
@@ -715,46 +916,30 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return;
     }
 
-    // 마지막 편집자면 기존 팝업
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('편집이 저장되지 않았습니다'),
-        content: const Text('저장하지 않고 나가시겠습니까?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'cancel'),
-            child: const Text('취소'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, 'discard'),
-            child: const Text('저장 안 함'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, 'save'),
-            child: const Text('저장'),
-          ),
-        ],
-      ),
-    );
+    // 마지막 편집자면 커스텀 디자인 팝업
+final result = await showDialog<String>(
+  context: context,
+  barrierDismissible: false,
+  builder: (ctx) => const _ConfirmExitPopup(),
+);
 
     switch (result) {
-      case 'save':
-        await _onSave();
-        break;
-      case 'discard':
-        await _endSession();
-        if (widget.albumId != null && _targetKey != null) {
-          await _svc.tryCleanupOpsIfNoEditors(
-            albumId: widget.albumId!,
-            photoId: _targetKey!,
-          );
-        }
-        if (mounted) Navigator.pop(context, {'status': 'discard'});
-        break;
-      default:
-        break;
+  case 'save':
+    await _onSave();
+    break;
+  case 'discard':
+    await _endSession();
+    if (widget.albumId != null && _targetKey != null) {
+      await _svc.tryCleanupOpsIfNoEditors(
+        albumId: widget.albumId!,
+        photoId: _targetKey!,
+      );
     }
+    if (mounted) Navigator.pop(context, {'status': 'discard'});
+    break;
+  default:
+    break;
+}
   }
 
   Future<void> _handleBack() async {
@@ -1168,7 +1353,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   // 조정툴 진입 시 베이스 스냅샷
                   if (i == 2 || i == 4 || i == 5) {
                     _adjustBaseBytes = await _currentBytes();
-                    if (i == 2) _brightness = 0.0;
+                    //if (i == 2) _brightness = 0.0;
                     if (i == 4) _saturation = 0.0;
                     if (i == 5) _sharp = 0.0;
                   }
@@ -1195,7 +1380,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
         ),
         const SizedBox(height: 8),
 
-        /// ⬇️ 이 부분이 빠져서 패널이 안 보였던 거예요!
+        /// ⬇️ 패널 스위처
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
           child: switch (_selectedTool) {
@@ -1612,7 +1797,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
       // ✅ 재할당 대신, 내용만 교체
       _faceParams
         ..clear()
-        ..addAll(_cloneParams(snap.params)); // 아래 2) 참고
+        ..addAll(_cloneParams(snap.params));
     });
   }
 
@@ -1627,8 +1812,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     );
   }
 
-  // 추후 슬라이더(피부/눈/코/입술) 넣을 자리
-  // edit_view_screen.dart
+  // 얼굴 보정 패널 오픈 (밝기와 동일한 “결정적 베이스”에서 시작)
   Future<void> _openBeautyPanel() async {
     if (_selectedFace == null) {
       ScaffoldMessenger.of(
@@ -1637,14 +1821,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return;
     }
 
-    // 1) 현재 이미지 바이트를 PNG로 통일
-    final base = await _currentBytes();
-    Uint8List _ensurePng(Uint8List b) {
-      final im = img.decodeImage(b);
-      return Uint8List.fromList(img.encodePng(im!));
-    }
-
-    _beautyBasePng = _ensurePng(base);
+    // 1) 결정적 베이스 PNG 확보(원본→회전→반전→크롭)
+    _beautyBasePng = await _renderBaseForBeauty();
 
     // 2) 실제 이미지 픽셀 크기 계산
     final imInfo = img.decodeImage(_beautyBasePng!)!;
@@ -1674,10 +1852,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
           ),
         );
 
-    // 5) 반영
+    // 5) 반영 + 브로드캐스트
     if (result != null && mounted) {
       final prev = await _currentBytes();
       final paramsCopy = _cloneParams(_faceParams);
+
       setState(() {
         _editedBytes = result.image;
         _beautyParams = result.params;
@@ -1685,21 +1864,24 @@ class _EditViewScreenState extends State<EditViewScreen> {
         _faceUndo.add((image: Uint8List.fromList(prev), params: paramsCopy));
         _faceParams[_selectedFace!] = result.params;
       });
+
+      await _sendOp('beauty', {
+        'face': _selectedFace,
+        'params': result.params.toMap(),
+        'prev': init.toMap(),
+        'at': DateTime.now().toIso8601String(),
+      });
     }
   }
 
   void _exitFaceMode() {
-    // 기본 툴바로 복귀
     setState(() {
-      _isFaceEditMode = false; // ← 이 한 줄이 핵심
-      _selectedTool = 1; // 메인툴바에서 '얼굴' 아이콘 선택 상태 유지(원하면 다른 인덱스로)
-      _selectedFace = null; // 선택 해제(선택)
-      _showLm = false; // 랜드마크 표시 끔(선택)
+      _isFaceEditMode = false;
+      _selectedTool = 1;
+      _selectedFace = null;
+      _showLm = false;
     });
-
-    // 얼굴보정 전용 undo 스택은 정리(선택)
     _faceUndo.clear();
-    // _beautyBasePng = null; // 필요하면 캡처 베이스도 초기화
   }
 
   // 사용감 좋은 변형
@@ -1927,6 +2109,30 @@ class _ZeroTick extends StatelessWidget {
       ),
     );
   }
+}
+
+// ===== 얼굴보정 직렬화 유틸 =====
+extension BeautyParamsX on BeautyParams {
+  Map<String, dynamic> toMap() => {
+    'skinTone': skinTone,
+    'eyeTail': eyeTail,
+    'lipSatGain': lipSatGain,
+    'lipIntensity': lipIntensity,
+    'hueShift': hueShift,
+    'noseAmount': noseAmount,
+  };
+}
+
+BeautyParams beautyParamsFromMap(Map<String, dynamic>? m) {
+  if (m == null) return BeautyParams();
+  return BeautyParams(
+    skinTone: (m['skinTone'] as num?)?.toDouble() ?? 0.0,
+    eyeTail: (m['eyeTail'] as num?)?.toDouble() ?? 0.0,
+    lipSatGain: (m['lipSatGain'] as num?)?.toDouble() ?? 0.25,
+    lipIntensity: (m['lipIntensity'] as num?)?.toDouble() ?? 0.6,
+    hueShift: (m['hueShift'] as num?)?.toDouble() ?? 0.0,
+    noseAmount: (m['noseAmount'] as num?)?.toDouble() ?? 0.0,
+  );
 }
 
 enum _ActiveHandle { none, move, tl, tr, bl, br, top, right, bottom, left }

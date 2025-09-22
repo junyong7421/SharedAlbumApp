@@ -4,6 +4,8 @@ import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import 'edit_view_screen.dart';
 import 'dart:math';
+import 'dart:math' as math; // math.pi, math.min 등
+import 'package:vector_math/vector_math_64.dart' as vmath; // Matrix4
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 // 서비스 + 모델 (Album, Photo 포함)
@@ -569,6 +571,127 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
   // ---------------------- Album Detail ----------------------
 
+// 좋아요한 사람 팝업: likedBy(uid 리스트) → 이름 조회해서 표시
+Future<void> _showLikedByPopup(List<String> likedUids) async {
+  if (!mounted) return;
+
+  if (likedUids.isEmpty) {
+    await showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: const Color(0xFFF6F9FF),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+          side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Text(
+                  '좋아요한 사람',
+                  style: TextStyle(
+                    color: Color(0xFF625F8C),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  '아직 아무도 하트를 누르지 않았어요.',
+                  style: TextStyle(color: Color(0xFF625F8C)),
+                ),
+                SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return;
+  }
+
+  // Firestore users 컬렉션에서 이름 조회 (whereIn 10개 제한 → 청크로)
+  final fs = FirebaseFirestore.instance;
+  final List<String> names = [];
+  try {
+    for (int i = 0; i < likedUids.length; i += 10) {
+      final chunk = likedUids.skip(i).take(10).toList();
+      final qs = await fs
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .get();
+      final got = qs.docs.map((d) {
+        final m = d.data();
+        final display = (m['displayName'] ?? m['name'] ?? '').toString().trim();
+        if (display.isNotEmpty) return display;
+        final short = d.id.length > 4 ? d.id.substring(d.id.length - 4) : d.id;
+        return '사용자-$short';
+      }).toList();
+      names.addAll(got);
+    }
+  } catch (_) {
+    // 조회 실패 시 uid 뒷 4자리로 대체
+    for (final u in likedUids) {
+      final short = u.length > 4 ? u.substring(u.length - 4) : u;
+      names.add('사용자-$short');
+    }
+  }
+
+  await showDialog(
+    context: context,
+    builder: (_) {
+      return Dialog(
+        backgroundColor: const Color(0xFFF6F9FF),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+          side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  '좋아요한 사람',
+                  style: TextStyle(
+                    color: Color(0xFF625F8C),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                Expanded(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemBuilder: (context, i) =>
+                        _GradientPillButton(text: names[i]),
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemCount: names.length,
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: const _GradientPillButton(text: '닫기'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
   Widget _buildExpandedAlbumView() {
     final albumId = _selectedAlbumId!;
     final title = _selectedAlbumTitle ?? '앨범';
@@ -730,59 +853,18 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                 ),
                               ),
                               Positioned(
-                                right: 6,
-                                bottom: 6,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    segmentedHeart(
-                                      totalSlots: totalSlotsForRender,
-                                      filledColors: likedColors
-                                          .take(totalSlotsForRender)
-                                          .toList(),
-                                      size: 18,
-                                      isLikedByMe: isLikedByMe,
-                                      onTap: () async {
-                                        try {
-                                          await _svc.toggleLike(
-                                            uid: _uid,
-                                            albumId: albumId,
-                                            photoId: p.id,
-                                            like: !isLikedByMe,
-                                          );
-                                        } catch (e) {
-                                          if (!mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text('좋아요 실패: $e'),
-                                            ),
-                                          );
-                                        }
-                                      },
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black45,
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Text(
-                                        '${p.likedBy.length}',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+  right: 6,
+  bottom: 6,
+  child: _LikeBadge(
+    likedUids: p.likedBy,
+    myUid: _uid,
+    albumId: albumId,
+    photoId: p.id,
+    svc: _svc,
+    colorForUid: colorForUid, // 이미 파일 상단에 있는 함수 그대로 전달
+  ),
+),
+
                             ],
                           ),
                         );
@@ -790,115 +872,98 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                     );
                   } else {
                     // ===================== 큰 사진 (PageView) =====================
-                    final controller = PageController(
-                      initialPage: _selectedImageIndex!,
-                    );
-                    return PageView.builder(
-                      controller: controller,
-                      itemCount: photos.length,
-                      onPageChanged: (i) =>
-                          setState(() => _selectedImageIndex = i),
-                      itemBuilder: (context, i) {
-                        final p = photos[i];
-                        final likedUids = p.likedBy;
-                        final isLikedByMe = likedUids.contains(_uid);
-                        final likedColors = likedUids
-                            .map((u) => colorForUid(u))
-                            .toList();
+final controller = PageController(
+  initialPage: _selectedImageIndex!,
+);
+return PageView.builder(
+  controller: controller,
+  itemCount: photos.length,
+  onPageChanged: (i) =>
+      setState(() => _selectedImageIndex = i),
+  itemBuilder: (context, i) {
+    final p = photos[i];
+    final likedUids = p.likedBy;
+    final isLikedByMe = likedUids.contains(_uid);
+    final likedColors = likedUids
+        .map((u) => colorForUid(u))
+        .toList();
 
-                        final m = likedUids.length;
-                        final totalSlotsForRender = m == 0
-                            ? 0
-                            : (m > 12 ? 12 : m);
+    final m = likedUids.length;
+    final totalSlotsForRender = m == 0
+        ? 0
+        : (m > 12 ? 12 : m);
 
-                        return Column(
-                          children: [
-                            Align(
-                              alignment: Alignment.topRight,
-                              child: Padding(
-                                padding: const EdgeInsets.only(
-                                  bottom: 10,
-                                  right: 4,
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    segmentedHeart(
-                                      totalSlots: totalSlotsForRender,
-                                      filledColors: likedColors
-                                          .take(totalSlotsForRender)
-                                          .toList(),
-                                      size: 28,
-                                      isLikedByMe: isLikedByMe,
-                                      onTap: () async {
-                                        try {
-                                          await _svc.toggleLike(
-                                            uid: _uid,
-                                            albumId: albumId,
-                                            photoId: p.id,
-                                            like: !isLikedByMe,
-                                          );
-                                        } catch (e) {
-                                          if (!mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text('좋아요 실패: $e'),
-                                            ),
-                                          );
-                                        }
-                                      },
-                                    ),
-                                    const SizedBox(width: 12),
-                                    GestureDetector(
-                                      onTap: () => _openEditor(
-                                        photo: p,
-                                        albumId: albumId,
-                                        albumTitle: title,
-                                      ),
-                                      child: _pill("편집하기"),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    GestureDetector(
-                                      onTap: () async {
-                                        try {
-                                          await _svc.deletePhoto(
-                                            uid: _uid,
-                                            albumId: albumId,
-                                            photoId: p.id,
-                                          );
-                                        } catch (e) {
-                                          if (!mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text('삭제 실패: $e'),
-                                            ),
-                                          );
-                                        }
-                                      },
-                                      child: _pill("삭제"),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(20),
-                                child: Image.network(
-                                  p.url,
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    );
+    return Column(
+      children: [
+        Align(
+          alignment: Alignment.topRight,
+          child: Padding(
+            padding: const EdgeInsets.only(
+              bottom: 10,
+              right: 4,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _LikeBadge(
+                  likedUids: p.likedBy,
+                  myUid: _uid,
+                  albumId: albumId,
+                  photoId: p.id,
+                  svc: _svc,
+                  colorForUid: colorForUid,
+                ),
+                const SizedBox(width: 12),
+
+                GestureDetector(
+                  onTap: () => _openEditor(
+                    photo: p,
+                    albumId: albumId,
+                    albumTitle: title,
+                  ),
+                  child: _pill("편집하기"),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () async {
+                    try {
+                      await _svc.deletePhoto(
+                        uid: _uid,
+                        albumId: albumId,
+                        photoId: p.id,
+                      );
+                    } catch (e) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(
+                        SnackBar(
+                          content: Text('삭제 실패: $e'),
+                        ),
+                      );
+                    }
+                  },
+                  child: _pill("삭제"),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Image.network(
+              p.url,
+              width: double.infinity,
+              fit: BoxFit.cover,
+            ),
+          ),
+        ),
+      ],
+    );
+  },
+);
+
                   }
                 },
               );
@@ -955,10 +1020,288 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
   }
 }
 
+// CallGroupPopup 느낌의 그라데이션 알약 버튼 (radius=150)
+class _GradientPillButton extends StatelessWidget {
+  final String text;
+  const _GradientPillButton({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(150),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+        ),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
+/// 하트+숫자 캡슐 배지 (스샷 스타일)
+class _LikeBadge extends StatelessWidget {
+  final List<String> likedUids;
+  final String myUid;
+  final String albumId;
+  final String photoId;
+  final SharedAlbumService svc;
+  final Color Function(String uid) colorForUid;
+  final int maxSlices; // 12 고정 사용
+
+  const _LikeBadge({
+    required this.likedUids,
+    required this.myUid,
+    required this.albumId,
+    required this.photoId,
+    required this.svc,
+    required this.colorForUid,
+    this.maxSlices = 12,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isLikedByMe = likedUids.contains(myUid);
+    final m = likedUids.length;
+    final total = m == 0 ? 0 : (m > maxSlices ? maxSlices : m);
+    final colors = likedUids.map(colorForUid).take(total).toList();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 하트 (탭 = 토글)
+          GestureDetector(
+            onTap: () async {
+              try {
+                await svc.toggleLike(
+                  uid: myUid,
+                  albumId: albumId,
+                  photoId: photoId,
+                  like: !isLikedByMe,
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('좋아요 실패: $e')),
+                );
+              }
+            },
+            child: CustomPaint(
+              size: const Size.square(22),
+              painter: _HeartPainter(
+                totalSlots: total,
+                filledColors: colors,
+                outlineColor:
+                    isLikedByMe ? const Color(0xFF625F8C) : Colors.grey.shade400,
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 6),
+
+          // 숫자 동그라미 (탭 = 팝업)
+          GestureDetector(
+            onTap: () async {
+              // 부모 State의 메서드를 그대로 쓴다면: context.findAncestorStateOfType 등으로 호출해도 되지만
+              // SharedAlbumScreen의 private 메서드를 그대로 쓰고 있으므로 간단히 showDialog를 이 안에서 구현
+              final liked = likedUids; // 캡처
+              if (liked.isEmpty) {
+                await showDialog(
+                  context: context,
+                  builder: (_) => Dialog(
+                    backgroundColor: const Color(0xFFF6F9FF),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.fromLTRB(20, 24, 20, 24),
+                      child: Text(
+                        '아직 아무도 하트를 누르지 않았어요.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Color(0xFF625F8C)),
+                      ),
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              // 이름 조회 → 팝업
+              final fs = FirebaseFirestore.instance;
+              final names = <String>[];
+              try {
+                for (int i = 0; i < liked.length; i += 10) {
+                  final chunk = liked.skip(i).take(10).toList();
+                  final qs = await fs
+                      .collection('users')
+                      .where(FieldPath.documentId, whereIn: chunk)
+                      .get();
+                  names.addAll(qs.docs.map((d) {
+                    final m = d.data();
+                    final n = (m['displayName'] ?? m['name'] ?? '')
+                        .toString()
+                        .trim();
+                    if (n.isNotEmpty) return n;
+                    final short = d.id.length > 4
+                        ? d.id.substring(d.id.length - 4)
+                        : d.id;
+                    return '사용자-$short';
+                  }));
+                }
+              } catch (_) {
+                for (final u in liked) {
+                  final short =
+                      u.length > 4 ? u.substring(u.length - 4) : u;
+                  names.add('사용자-$short');
+                }
+              }
+
+              await showDialog(
+                context: context,
+                builder: (_) => Dialog(
+                  backgroundColor: const Color(0xFFF6F9FF),
+                  insetPadding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+                  ),
+                  child: ConstrainedBox(
+                    constraints:
+                        const BoxConstraints(maxWidth: 420, maxHeight: 520),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            '좋아요한 사람',
+                            style: TextStyle(
+                              color: Color(0xFF625F8C),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Expanded(
+                            child: ListView.separated(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 8),
+                              itemCount: names.length,
+                              itemBuilder: (c, i) => Container(
+                                width: double.infinity,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 16),
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(150),
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFFC6DCFF),
+                                      Color(0xFFD2D1FF),
+                                      Color(0xFFF5CFFF)
+                                    ],
+                                  ),
+                                ),
+                                child: Text(
+                                  names[i],
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 12),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          GestureDetector(
+                            onTap: () => Navigator.pop(context),
+                            child: Container(
+                              width: double.infinity,
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 16),
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(150),
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFFC6DCFF),
+                                    Color(0xFFD2D1FF),
+                                    Color(0xFFF5CFFF)
+                                  ],
+                                ),
+                              ),
+                              child: const Text(
+                                '닫기',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+            child: Container(
+              width: 22,
+              height: 22,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE6E6EB),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Text(
+                '${likedUids.length}',
+                style: const TextStyle(
+                  color: Color(0xFF4C4A64),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ====================== 하트 페인터 ======================
 class _HeartPainter extends CustomPainter {
-  final int totalSlots;
-  final List<Color> filledColors;
+  final int totalSlots;           // m명이면 m
+  final List<Color> filledColors; // 길이=m
   final Color outlineColor;
 
   _HeartPainter({
@@ -967,57 +1310,60 @@ class _HeartPainter extends CustomPainter {
     required this.outlineColor,
   });
 
-  // 더 클래식한 하트(좌우 대칭, 위 볼 선명, 아래 포인트 뚜렷)
-  Path _heartPath(Size s) {
-    final w = s.width, h = s.height;
+  // Material favorite(24x24)과 유사한 하트 Path
+  // *정확히 동일 좌표가 아니더라도 아이콘스러운 '진짜 하트' 실루엣입니다.
+  Path _materialLikeHeart24() {
     final p = Path();
-
-    // 비율 고정(아이콘 사이즈 상관없이 동일 실루엣)
-    final topY = 0.28 * h;
-    final leftX = 0.22 * w;
-    final rightX = 0.78 * w;
-    final midX = 0.50 * w;
-    final botY = 0.94 * h;
-
-    // 시작: 위 중앙 약간 왼쪽
-    p.moveTo(midX, topY);
-
-    // 왼쪽 볼
-    p.cubicTo(0.38 * w, 0.12 * h, 0.10 * w, 0.26 * h, leftX, 0.50 * h);
-    // 왼쪽 아래에서 바닥 포인트
-    p.cubicTo(0.26 * w, 0.80 * h, 0.40 * w, 0.92 * h, midX, botY);
-    // 바닥에서 오른쪽 아래
-    p.cubicTo(0.60 * w, 0.92 * h, 0.74 * w, 0.80 * h, rightX, 0.50 * h);
-    // 오른쪽 볼 → 위 중앙 복귀
-    p.cubicTo(0.90 * w, 0.26 * h, 0.62 * w, 0.12 * h, midX, topY);
+    // 위 중앙에서 시작해 좌측 볼 → 바닥 포인트 → 우측 볼 → 위 중앙 폐합
+    p.moveTo(12.0, 6.0);
+    p.cubicTo(9.5, 3.5, 5.2, 4.0, 4.0, 7.6);
+    p.cubicTo(3.2, 10.0, 4.5, 12.7, 7.0, 14.9);
+    p.cubicTo(8.8, 16.5, 10.7, 18.0, 12.0, 19.1);
+    p.cubicTo(13.3, 18.0, 15.2, 16.5, 17.0, 14.9);
+    p.cubicTo(19.5, 12.7, 20.8, 10.0, 20.0, 7.6);
+    p.cubicTo(18.8, 4.0, 14.5, 3.5, 12.0, 6.0);
     p.close();
     return p;
+  }
+
+  // 화면 size에 맞게 24x24 벡터를 스케일 & 센터링
+  Path _heartPath(Size s) {
+    final base = _materialLikeHeart24();
+    const vbW = 24.0, vbH = 24.0;
+    final scale = math.min(s.width / vbW, s.height / vbH);
+    final dx = (s.width - vbW * scale) / 2.0;
+    final dy = (s.height - vbH * scale) / 2.0;
+
+    final m = vmath.Matrix4.identity()
+      ..translate(dx, dy)
+      ..scale(scale, scale);
+    return base.transform(m.storage);
   }
 
   @override
   void paint(Canvas canvas, Size size) {
     final heart = _heartPath(size);
 
-    // 하트 내부만 그리기
+    // 1) 하트 내부만 그리도록 clip
     canvas.save();
     canvas.clipPath(heart);
 
+    // 2) 채우기 (한 명이면 단색, m명이면 m등분)
     final m = totalSlots.clamp(0, filledColors.length);
     if (m > 0) {
       if (m == 1) {
-        // 한 명 → 단색 꽉 채움
         final paint = Paint()
           ..color = filledColors.first
           ..style = PaintingStyle.fill;
         canvas.drawRect(Offset.zero & size, paint);
       } else {
-        // m명 → 정확히 m등분 (좌/우 반반부터 시작)
-        final sweep = 2 * 3.141592653589793 / m;
-        final start0 = -3.141592653589793; // ⬅️ 왼쪽(9시)에서 시작 → 2명이면 좌/우 반반
+        // m등분: 2명이면 좌/우 반반이 보이도록 9시 방향(-π)부터 시작
+        final sweep = 2 * math.pi / m;
+        final start0 = -math.pi;
         final b = heart.getBounds();
-        final cx = b.center.dx, cy = b.center.dy;
-        final r = (b.longestSide) * 0.80;
-        final rect = Rect.fromCircle(center: Offset(cx, cy), radius: r);
+        final center = b.center;
+        final r = b.longestSide * 0.85; // 하트를 충분히 덮도록 반지름 여유
+        final rect = Rect.fromCircle(center: center, radius: r);
 
         for (int i = 0; i < m; i++) {
           final paint = Paint()
@@ -1029,19 +1375,19 @@ class _HeartPainter extends CustomPainter {
     }
     canvas.restore();
 
-    // 외곽선(조금 얇게)
+    // 3) 외곽선
     final border = Paint()
       ..color = outlineColor
       ..style = PaintingStyle.stroke
-      ..strokeWidth = (size.shortestSide * 0.08).clamp(1.0, 2.5)
+      ..strokeWidth = (size.shortestSide * 0.10).clamp(1.2, 3.0)
       ..isAntiAlias = true;
+
     canvas.drawPath(heart, border);
   }
 
   @override
   bool shouldRepaint(covariant _HeartPainter old) {
-    if (totalSlots != old.totalSlots) return true;
-    if (outlineColor != old.outlineColor) return true;
+    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor) return true;
     if (filledColors.length != old.filledColors.length) return true;
     for (var i = 0; i < filledColors.length; i++) {
       if (filledColors[i].value != old.filledColors[i].value) return true;
