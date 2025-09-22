@@ -571,6 +571,127 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
   // ---------------------- Album Detail ----------------------
 
+// 좋아요한 사람 팝업: likedBy(uid 리스트) → 이름 조회해서 표시
+Future<void> _showLikedByPopup(List<String> likedUids) async {
+  if (!mounted) return;
+
+  if (likedUids.isEmpty) {
+    await showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: const Color(0xFFF6F9FF),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+          side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Text(
+                  '좋아요한 사람',
+                  style: TextStyle(
+                    color: Color(0xFF625F8C),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  '아직 아무도 하트를 누르지 않았어요.',
+                  style: TextStyle(color: Color(0xFF625F8C)),
+                ),
+                SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return;
+  }
+
+  // Firestore users 컬렉션에서 이름 조회 (whereIn 10개 제한 → 청크로)
+  final fs = FirebaseFirestore.instance;
+  final List<String> names = [];
+  try {
+    for (int i = 0; i < likedUids.length; i += 10) {
+      final chunk = likedUids.skip(i).take(10).toList();
+      final qs = await fs
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .get();
+      final got = qs.docs.map((d) {
+        final m = d.data();
+        final display = (m['displayName'] ?? m['name'] ?? '').toString().trim();
+        if (display.isNotEmpty) return display;
+        final short = d.id.length > 4 ? d.id.substring(d.id.length - 4) : d.id;
+        return '사용자-$short';
+      }).toList();
+      names.addAll(got);
+    }
+  } catch (_) {
+    // 조회 실패 시 uid 뒷 4자리로 대체
+    for (final u in likedUids) {
+      final short = u.length > 4 ? u.substring(u.length - 4) : u;
+      names.add('사용자-$short');
+    }
+  }
+
+  await showDialog(
+    context: context,
+    builder: (_) {
+      return Dialog(
+        backgroundColor: const Color(0xFFF6F9FF),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
+          side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420, maxHeight: 520),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  '좋아요한 사람',
+                  style: TextStyle(
+                    color: Color(0xFF625F8C),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                Expanded(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemBuilder: (context, i) =>
+                        _GradientPillButton(text: names[i]),
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemCount: names.length,
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: const _GradientPillButton(text: '닫기'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}
+
   Widget _buildExpandedAlbumView() {
     final albumId = _selectedAlbumId!;
     final title = _selectedAlbumTitle ?? '앨범';
@@ -732,59 +853,18 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                 ),
                               ),
                               Positioned(
-                                right: 6,
-                                bottom: 6,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    segmentedHeart(
-                                      totalSlots: totalSlotsForRender,
-                                      filledColors: likedColors
-                                          .take(totalSlotsForRender)
-                                          .toList(),
-                                      size: 18,
-                                      isLikedByMe: isLikedByMe,
-                                      onTap: () async {
-                                        try {
-                                          await _svc.toggleLike(
-                                            uid: _uid,
-                                            albumId: albumId,
-                                            photoId: p.id,
-                                            like: !isLikedByMe,
-                                          );
-                                        } catch (e) {
-                                          if (!mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text('좋아요 실패: $e'),
-                                            ),
-                                          );
-                                        }
-                                      },
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black45,
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: Text(
-                                        '${p.likedBy.length}',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 11,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
+  right: 6,
+  bottom: 6,
+  child: _LikeBadge(
+    likedUids: p.likedBy,
+    myUid: _uid,
+    albumId: albumId,
+    photoId: p.id,
+    svc: _svc,
+    colorForUid: colorForUid, // 이미 파일 상단에 있는 함수 그대로 전달
+  ),
+),
+
                             ],
                           ),
                         );
@@ -792,115 +872,98 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                     );
                   } else {
                     // ===================== 큰 사진 (PageView) =====================
-                    final controller = PageController(
-                      initialPage: _selectedImageIndex!,
-                    );
-                    return PageView.builder(
-                      controller: controller,
-                      itemCount: photos.length,
-                      onPageChanged: (i) =>
-                          setState(() => _selectedImageIndex = i),
-                      itemBuilder: (context, i) {
-                        final p = photos[i];
-                        final likedUids = p.likedBy;
-                        final isLikedByMe = likedUids.contains(_uid);
-                        final likedColors = likedUids
-                            .map((u) => colorForUid(u))
-                            .toList();
+final controller = PageController(
+  initialPage: _selectedImageIndex!,
+);
+return PageView.builder(
+  controller: controller,
+  itemCount: photos.length,
+  onPageChanged: (i) =>
+      setState(() => _selectedImageIndex = i),
+  itemBuilder: (context, i) {
+    final p = photos[i];
+    final likedUids = p.likedBy;
+    final isLikedByMe = likedUids.contains(_uid);
+    final likedColors = likedUids
+        .map((u) => colorForUid(u))
+        .toList();
 
-                        final m = likedUids.length;
-                        final totalSlotsForRender = m == 0
-                            ? 0
-                            : (m > 12 ? 12 : m);
+    final m = likedUids.length;
+    final totalSlotsForRender = m == 0
+        ? 0
+        : (m > 12 ? 12 : m);
 
-                        return Column(
-                          children: [
-                            Align(
-                              alignment: Alignment.topRight,
-                              child: Padding(
-                                padding: const EdgeInsets.only(
-                                  bottom: 10,
-                                  right: 4,
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    segmentedHeart(
-                                      totalSlots: totalSlotsForRender,
-                                      filledColors: likedColors
-                                          .take(totalSlotsForRender)
-                                          .toList(),
-                                      size: 28,
-                                      isLikedByMe: isLikedByMe,
-                                      onTap: () async {
-                                        try {
-                                          await _svc.toggleLike(
-                                            uid: _uid,
-                                            albumId: albumId,
-                                            photoId: p.id,
-                                            like: !isLikedByMe,
-                                          );
-                                        } catch (e) {
-                                          if (!mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text('좋아요 실패: $e'),
-                                            ),
-                                          );
-                                        }
-                                      },
-                                    ),
-                                    const SizedBox(width: 12),
-                                    GestureDetector(
-                                      onTap: () => _openEditor(
-                                        photo: p,
-                                        albumId: albumId,
-                                        albumTitle: title,
-                                      ),
-                                      child: _pill("편집하기"),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    GestureDetector(
-                                      onTap: () async {
-                                        try {
-                                          await _svc.deletePhoto(
-                                            uid: _uid,
-                                            albumId: albumId,
-                                            photoId: p.id,
-                                          );
-                                        } catch (e) {
-                                          if (!mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text('삭제 실패: $e'),
-                                            ),
-                                          );
-                                        }
-                                      },
-                                      child: _pill("삭제"),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(20),
-                                child: Image.network(
-                                  p.url,
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    );
+    return Column(
+      children: [
+        Align(
+          alignment: Alignment.topRight,
+          child: Padding(
+            padding: const EdgeInsets.only(
+              bottom: 10,
+              right: 4,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _LikeBadge(
+                  likedUids: p.likedBy,
+                  myUid: _uid,
+                  albumId: albumId,
+                  photoId: p.id,
+                  svc: _svc,
+                  colorForUid: colorForUid,
+                ),
+                const SizedBox(width: 12),
+
+                GestureDetector(
+                  onTap: () => _openEditor(
+                    photo: p,
+                    albumId: albumId,
+                    albumTitle: title,
+                  ),
+                  child: _pill("편집하기"),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () async {
+                    try {
+                      await _svc.deletePhoto(
+                        uid: _uid,
+                        albumId: albumId,
+                        photoId: p.id,
+                      );
+                    } catch (e) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(
+                        SnackBar(
+                          content: Text('삭제 실패: $e'),
+                        ),
+                      );
+                    }
+                  },
+                  child: _pill("삭제"),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(20),
+            child: Image.network(
+              p.url,
+              width: double.infinity,
+              fit: BoxFit.cover,
+            ),
+          ),
+        ),
+      ],
+    );
+  },
+);
+
                   }
                 },
               );
@@ -952,6 +1015,284 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
           color: Colors.white,
           fontWeight: FontWeight.bold,
         ),
+      ),
+    );
+  }
+}
+
+// CallGroupPopup 느낌의 그라데이션 알약 버튼 (radius=150)
+class _GradientPillButton extends StatelessWidget {
+  final String text;
+  const _GradientPillButton({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(150),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+        ),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 16,
+        ),
+      ),
+    );
+  }
+}
+
+/// 하트+숫자 캡슐 배지 (스샷 스타일)
+class _LikeBadge extends StatelessWidget {
+  final List<String> likedUids;
+  final String myUid;
+  final String albumId;
+  final String photoId;
+  final SharedAlbumService svc;
+  final Color Function(String uid) colorForUid;
+  final int maxSlices; // 12 고정 사용
+
+  const _LikeBadge({
+    required this.likedUids,
+    required this.myUid,
+    required this.albumId,
+    required this.photoId,
+    required this.svc,
+    required this.colorForUid,
+    this.maxSlices = 12,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isLikedByMe = likedUids.contains(myUid);
+    final m = likedUids.length;
+    final total = m == 0 ? 0 : (m > maxSlices ? maxSlices : m);
+    final colors = likedUids.map(colorForUid).take(total).toList();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 하트 (탭 = 토글)
+          GestureDetector(
+            onTap: () async {
+              try {
+                await svc.toggleLike(
+                  uid: myUid,
+                  albumId: albumId,
+                  photoId: photoId,
+                  like: !isLikedByMe,
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('좋아요 실패: $e')),
+                );
+              }
+            },
+            child: CustomPaint(
+              size: const Size.square(22),
+              painter: _HeartPainter(
+                totalSlots: total,
+                filledColors: colors,
+                outlineColor:
+                    isLikedByMe ? const Color(0xFF625F8C) : Colors.grey.shade400,
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 6),
+
+          // 숫자 동그라미 (탭 = 팝업)
+          GestureDetector(
+            onTap: () async {
+              // 부모 State의 메서드를 그대로 쓴다면: context.findAncestorStateOfType 등으로 호출해도 되지만
+              // SharedAlbumScreen의 private 메서드를 그대로 쓰고 있으므로 간단히 showDialog를 이 안에서 구현
+              final liked = likedUids; // 캡처
+              if (liked.isEmpty) {
+                await showDialog(
+                  context: context,
+                  builder: (_) => Dialog(
+                    backgroundColor: const Color(0xFFF6F9FF),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.fromLTRB(20, 24, 20, 24),
+                      child: Text(
+                        '아직 아무도 하트를 누르지 않았어요.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Color(0xFF625F8C)),
+                      ),
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              // 이름 조회 → 팝업
+              final fs = FirebaseFirestore.instance;
+              final names = <String>[];
+              try {
+                for (int i = 0; i < liked.length; i += 10) {
+                  final chunk = liked.skip(i).take(10).toList();
+                  final qs = await fs
+                      .collection('users')
+                      .where(FieldPath.documentId, whereIn: chunk)
+                      .get();
+                  names.addAll(qs.docs.map((d) {
+                    final m = d.data();
+                    final n = (m['displayName'] ?? m['name'] ?? '')
+                        .toString()
+                        .trim();
+                    if (n.isNotEmpty) return n;
+                    final short = d.id.length > 4
+                        ? d.id.substring(d.id.length - 4)
+                        : d.id;
+                    return '사용자-$short';
+                  }));
+                }
+              } catch (_) {
+                for (final u in liked) {
+                  final short =
+                      u.length > 4 ? u.substring(u.length - 4) : u;
+                  names.add('사용자-$short');
+                }
+              }
+
+              await showDialog(
+                context: context,
+                builder: (_) => Dialog(
+                  backgroundColor: const Color(0xFFF6F9FF),
+                  insetPadding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                    side: const BorderSide(color: Color(0xFF625F8C), width: 3),
+                  ),
+                  child: ConstrainedBox(
+                    constraints:
+                        const BoxConstraints(maxWidth: 420, maxHeight: 520),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text(
+                            '좋아요한 사람',
+                            style: TextStyle(
+                              color: Color(0xFF625F8C),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Expanded(
+                            child: ListView.separated(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 8),
+                              itemCount: names.length,
+                              itemBuilder: (c, i) => Container(
+                                width: double.infinity,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 16),
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(150),
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFFC6DCFF),
+                                      Color(0xFFD2D1FF),
+                                      Color(0xFFF5CFFF)
+                                    ],
+                                  ),
+                                ),
+                                child: Text(
+                                  names[i],
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 12),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          GestureDetector(
+                            onTap: () => Navigator.pop(context),
+                            child: Container(
+                              width: double.infinity,
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 16),
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(150),
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFFC6DCFF),
+                                    Color(0xFFD2D1FF),
+                                    Color(0xFFF5CFFF)
+                                  ],
+                                ),
+                              ),
+                              child: const Text(
+                                '닫기',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+            child: Container(
+              width: 22,
+              height: 22,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE6E6EB),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Text(
+                '${likedUids.length}',
+                style: const TextStyle(
+                  color: Color(0xFF4C4A64),
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
