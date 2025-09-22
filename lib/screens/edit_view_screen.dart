@@ -1020,6 +1020,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
         final paintSize = Size(c.maxWidth, c.maxHeight);
 
         return GestureDetector(
+          onTapDown: (details) {
+            // ← 추가: 얼굴 탭해서 선택
+            final local = details.localPosition;
+            final idx = _hitTestFace(local, paintSize);
+            setState(() => _selectedFace = idx);
+          },
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -1033,7 +1039,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
                     onStageSize: (s) => _lastStageSize = s,
                   ),
                 ),
-              if (_isFaceEditMode && _faces468.isNotEmpty)
+              if (_isFaceEditMode &&
+                  _faces468.isNotEmpty &&
+                  _faceOverlayOn) // ← 수정: 오버레이 표시 가드 복원**
                 IgnorePointer(
                   ignoring: true,
                   child: CustomPaint(
@@ -1052,6 +1060,20 @@ class _EditViewScreenState extends State<EditViewScreen> {
         );
       },
     );
+  }
+
+  int? _hitTestFace(Offset pos, Size size) {
+    for (int i = 0; i < _faceRects.length; i++) {
+      final r = _faceRects[i];
+      final rectPx = Rect.fromLTRB(
+        r.left * size.width,
+        r.top * size.height,
+        r.right * size.width,
+        r.bottom * size.height,
+      ).inflate(12); // 터치 여유
+      if (rectPx.contains(pos)) return i;
+    }
+    return null;
   }
 
   Widget _buildSinglePreview(String path) {
@@ -1747,12 +1769,60 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
   }
 
-  // 얼굴 검출(필요 시 구현)
   Future<void> _smokeTestLoadTask() async {
-    /* 그대로/생략 */
+    try {
+      final data = await rootBundle.load(
+        'assets/mediapipe/face_landmarker.task',
+      );
+      debugPrint('✅ face_landmarker.task loaded: ${data.lengthInBytes} bytes');
+      if (mounted) {
+        setState(() => _taskLoadedOk = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('모델 로드 OK (${data.lengthInBytes} bytes)')),
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ face_landmarker.task load failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('모델 로드 실패: $e')));
+      }
+    }
   }
+
   Future<void> _runFaceDetect() async {
-    /* 그대로/생략 */
+    // 1) 모델 로드(1회)
+    if (!_modelLoaded) {
+      final task = await rootBundle.load(
+        'assets/mediapipe/face_landmarker.task',
+      );
+      await FaceLandmarker.loadModel(task.buffer.asUint8List(), maxFaces: 5);
+      _modelLoaded = true;
+    }
+    // 2) 이미지 바이트 준비
+    if (_originalBytes == null) {
+      await _loadOriginalBytes();
+    }
+    if (_originalBytes == null) return;
+
+    final faces = await FaceLandmarker.detect(_originalBytes!);
+
+    setState(() {
+      _faces468 = faces;
+
+      // 각 얼굴의 정규화 바운딩 박스 계산
+      _faceRects = faces.map((pts) {
+        double minX = 1, minY = 1, maxX = 0, maxY = 0;
+        for (final p in pts) {
+          if (p.dx < minX) minX = p.dx;
+          if (p.dy < minY) minY = p.dy;
+          if (p.dx > maxX) maxX = p.dx;
+          if (p.dy > maxY) maxY = p.dy;
+        }
+        return Rect.fromLTRB(minX, minY, maxX, maxY); // 0~1
+      }).toList();
+    });
   }
 }
 
