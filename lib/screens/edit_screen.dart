@@ -582,7 +582,14 @@ class _EditScreenState extends State<EditScreen> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          const UserIconButton(),
+                          // ✅ **[변경]** 리스트의 const 제거 + **[추가]** photoUrl 전달
+                          UserIconButton(
+                            photoUrl: FirebaseAuth
+                                .instance
+                                .currentUser
+                                ?.photoURL, // **[추가]**
+                            radius: 24, // **[유지/선택]**
+                          ),
                           const SizedBox(width: 10),
                           const Text(
                             '편집',
@@ -620,7 +627,7 @@ class _EditScreenState extends State<EditScreen> {
                         ],
                       ),
                     ),
-
+                    
                     const SizedBox(height: 20),
 
                     // 편집 목록 버튼

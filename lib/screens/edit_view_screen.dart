@@ -994,7 +994,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
                               ),
                             ),
                             const SizedBox(width: 8),
-                            const UserIconButton(),
+                            UserIconButton(
+                              photoUrl:
+                                  FirebaseAuth.instance.currentUser?.photoURL,
+                              radius: 24,
+                            ),
                             const SizedBox(width: 10),
                             const Text(
                               '편집',

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/shared_album_list_service.dart';
-
+import '../widgets/user_icon_button.dart';
 // 팝업 / 오버레이
 import 'voice_call_popup.dart';
 import 'voice_call_overlay.dart';
@@ -39,7 +39,10 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  _buildUserAvatar(),
+                  UserIconButton(
+                    photoUrl: FirebaseAuth.instance.currentUser?.photoURL,
+                    radius: 24,
+                  ),
                   const SizedBox(width: 10),
                   const Text(
                     '공유앨범 목록 및 멤버관리',

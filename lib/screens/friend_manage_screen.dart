@@ -3,6 +3,7 @@ import '../widgets/custom_bottom_nav_bar.dart';
 import '../widgets/user_icon_button.dart';
 import '../services/friend_manage_service.dart';
 import 'add_user_popup.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class FriendManageScreen extends StatefulWidget {
   const FriendManageScreen({super.key});
@@ -32,7 +33,11 @@ class _FriendManageScreenState extends State<FriendManageScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  const UserIconButton(),
+                  // ✅ 기존 const 제거 + photoUrl 전달
+                  UserIconButton(
+                    photoUrl: FirebaseAuth.instance.currentUser?.photoURL,
+                    radius: 24, // 크기도 동일하게 맞춤
+                  ),
                   const SizedBox(width: 10),
                   const Text(
                     '친구관리',
