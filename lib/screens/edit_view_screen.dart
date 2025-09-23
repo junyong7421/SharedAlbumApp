@@ -288,6 +288,21 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return _editedBytes ?? _originalBytes!;
   }
 
+  Uint8List _composeAdjustments(Uint8List base) {
+    Uint8List out = base;
+
+    if (_latestBrightnessValue.abs() > 1e-6) {
+      out = ImageOps.adjustBrightness(out, _latestBrightnessValue);
+    }
+    if (_saturation.abs() > 1e-6) {
+      out = ImageOps.adjustSaturation(out, _saturation);
+    }
+    if (_sharp.abs() > 1e-6) {
+      out = ImageOps.sharpen(out, _sharp);
+    }
+    return out;
+  }
+
   // === 정규화 크롭 유틸 (이미지 좌표계 기준)
   Future<Uint8List> _cropNormalizedBytes(Uint8List src, Rect norm) async {
     final codec = await ui.instantiateImageCodec(src);
@@ -513,41 +528,37 @@ class _EditViewScreenState extends State<EditViewScreen> {
       case 'brightness':
         {
           final v = (data['value'] as num?)?.toDouble() ?? 0.0;
+          _latestBrightnessValue = v;
+          _brightness = v;
+
           final base = await _renderBaseForBrightness();
           _brightnessBaseBytes = Uint8List.fromList(base);
-          _latestBrightnessValue = v;
-          setState(() => _brightness = v);
+          final composed = _composeAdjustments(base);
 
-          final out = (v.abs() < 1e-6)
-              ? _brightnessBaseBytes!
-              : ImageOps.adjustBrightness(_brightnessBaseBytes!, v);
-          setState(() => _editedBytes = out);
+          setState(() => _editedBytes = composed);
           break;
         }
 
       case 'crop':
         {
-          if (_lastStageSize == null) return;
           final l = (data['l'] as num).toDouble();
           final t = (data['t'] as num).toDouble();
           final r = (data['r'] as num).toDouble();
           final b = (data['b'] as num).toDouble();
-          final stageRect = Rect.fromLTRB(
-            l * _lastStageSize!.width,
-            t * _lastStageSize!.height,
-            r * _lastStageSize!.width,
-            b * _lastStageSize!.height,
-          );
-          final bytes = await _currentBytes();
-          final out = ImageOps.cropFromStageRect(
-            srcBytes: bytes,
-            stageCropRect: stageRect,
-            stageSize: _lastStageSize!,
-          );
-          setState(() => _editedBytes = out);
 
-          _cropNorm = Rect.fromLTRB(l, t, r, b);
-          await _reapplyBrightnessIfActive();
+          // 현재 결과(없으면 원본) 바이트 기준으로 정규화 크롭
+          final src = await _currentBytes();
+          final normRect = Rect.fromLTRB(l, t, r, b);
+          final out = await _cropNormalizedBytes(src, normRect);
+
+          setState(() {
+            _editedBytes = out;
+            _cropNorm = normRect;
+            _dirty = true;
+          });
+
+          // 밝기/채도/샤픈 등의 "결정적 앵커"가 있다면 재적용
+          await _reapplyAdjustmentsIfActive();
           break;
         }
 
@@ -558,7 +569,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
           setState(() => _editedBytes = ImageOps.rotate(bytesR, deg));
 
           _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
-          await _reapplyBrightnessIfActive();
+          await _reapplyAdjustmentsIfActive();
           break;
         }
 
@@ -577,7 +588,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
           } else {
             _flipHState = !_flipHState;
           }
-          await _reapplyBrightnessIfActive();
+          await _reapplyAdjustmentsIfActive();
           break;
         }
 
@@ -633,16 +644,33 @@ class _EditViewScreenState extends State<EditViewScreen> {
           break;
         }
 
-      // [추가] 선명도 수신
       case 'sharpen':
         {
           final v = (data['value'] as num?)?.toDouble() ?? 0.0;
-          final base = await _renderBaseForBrightness(); // [추가]**
-          final out = (v.abs() < 1e-6) ? base : ImageOps.sharpen(base, v);
+          _sharp = v;
+
+          final base = await _renderBaseForBrightness();
+          _adjustBaseBytes = base;
+          final composed = _composeAdjustments(base);
+
           setState(() {
-            _adjustBaseBytes = base; // [추가]**
-            _editedBytes = out;
-            _sharp = v;
+            _editedBytes = composed;
+            _dirty = true;
+          });
+          break;
+        }
+      case 'saturation':
+        {
+          final v = (data['value'] as num?)?.toDouble() ?? 0.0;
+          _saturation = v;
+
+          final base = await _renderBaseForBrightness();
+          _adjustBaseBytes = base;
+          final composed = _composeAdjustments(base);
+
+          setState(() {
+            _editedBytes = composed;
+            _dirty = true;
           });
           break;
         }
@@ -650,15 +678,13 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _dirty = true;
   }
 
-  // 변환 후, 밝기 유지 중이면 재적용
-  Future<void> _reapplyBrightnessIfActive() async {
-    if (_selectedTool == 2 && _latestBrightnessValue.abs() > 1e-6) {
-      final base = await _renderBaseForBrightness();
-      _brightnessBaseBytes = Uint8List.fromList(base);
-      setState(() {
-        _editedBytes = ImageOps.adjustBrightness(base, _latestBrightnessValue);
-      });
-    }
+  Future<void> _reapplyAdjustmentsIfActive() async {
+    // 굳이 툴 선택 여부로 제한하지 말고 항상 합성해도 OK
+    final base = await _renderBaseForBrightness();
+    _brightnessBaseBytes = Uint8List.fromList(base);
+    setState(() {
+      _editedBytes = _composeAdjustments(base);
+    });
   }
 
   // ===== 백필 + 실시간 구독 =====
@@ -1374,25 +1400,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
                   // 조정툴 진입 시 베이스 스냅샷
                   if (i == 2 || i == 4 || i == 5) {
-                    _adjustBaseBytes = await _renderBaseForBrightness();
-                    //if (i == 4) _saturation = 0.0;
-                    //if (i == 5) _sharp = 0.0;
-                    // 🔹 툴 재진입시 현재 값으로 프리뷰 즉시 갱신
-                    if (i == 4) {
-                      final base = _adjustBaseBytes!;
-                      setState(() {
-                        _editedBytes = (_saturation.abs() < 1e-6)
-                            ? base
-                            : ImageOps.adjustSaturation(base, _saturation);
-                      });
-                    } else if (i == 5) {
-                      final base = _adjustBaseBytes!;
-                      setState(() {
-                        _editedBytes = (_sharp.abs() < 1e-6)
-                            ? base
-                            : ImageOps.sharpen(base, _sharp);
-                      });
-                    }
+                    final base = await _renderBaseForBrightness();
+                    _adjustBaseBytes = base;
+                    setState(() {
+                      _editedBytes = _composeAdjustments(base);
+                    });
                   }
                   setState(() {
                     _isFaceEditMode = false;
@@ -1437,13 +1449,17 @@ class _EditViewScreenState extends State<EditViewScreen> {
     key: const ValueKey('crop'),
     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
     children: [
-      _pill(
-        '초기화',
-        () => setState(() {
+      _pill('초기화', () async {
+        setState(() {
           _cropRectStage = null;
           _editedBytes = null; // 원본으로 복귀
-        }),
-      ),
+          _cropNorm = null; // ✅ 파이프라인 절대상태도 원복
+        });
+        await _reapplyAdjustmentsIfActive(); // ✅ 밝기/채도/샤픈 최신 베이스로 재합성
+
+        // (선택) 동기화를 원하면 전체영역 크롭을 브로드캐스트
+        await _sendOp('crop', {'l': 0.0, 't': 0.0, 'r': 1.0, 'b': 1.0});
+      }),
       _pill('맞춤', () {
         if (_lastStageSize == null) return;
         final s = _lastStageSize!;
@@ -1602,12 +1618,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
     setState(() {});
     try {
       final base = _adjustBaseBytes ?? await _renderBaseForBrightness();
-      if (_saturation.abs() < 1e-6) {
-        setState(() => _editedBytes = base);
-      } else {
-        final out = ImageOps.adjustSaturation(base, _saturation);
-        setState(() => _editedBytes = out);
-      }
+      final composed = _composeAdjustments(base); // 🔹 누적 합성
+      setState(() => _editedBytes = composed);
+
       await _sendOp('saturation', {'value': _saturation});
       _dirty = true;
     } finally {
@@ -1623,12 +1636,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
     setState(() {});
     try {
       final base = _adjustBaseBytes ?? await _renderBaseForBrightness();
-      if (_sharp.abs() < 1e-6) {
-        setState(() => _editedBytes = base);
-      } else {
-        final out = ImageOps.sharpen(base, _sharp);
-        setState(() => _editedBytes = out);
-      }
+      final composed = _composeAdjustments(base); // 🔹 누적 합성
+      setState(() => _editedBytes = composed);
+
       await _sendOp('sharpen', {'value': _sharp});
       _dirty = true;
     } finally {
@@ -1673,7 +1683,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _cropNorm = Rect.fromLTRB(norm['l']!, norm['t']!, norm['r']!, norm['b']!);
-    await _reapplyBrightnessIfActive();
+    await _reapplyAdjustmentsIfActive();
 
     await _sendOp('crop', norm);
   }
@@ -1685,20 +1695,17 @@ class _EditViewScreenState extends State<EditViewScreen> {
     setState(() {});
 
     try {
-      // ✅ 항상 결정적 앵커 기반
       final base = await _renderBaseForBrightness();
       _brightnessBaseBytes = Uint8List.fromList(base);
 
-      final out = (_brightness.abs() < 1e-6)
-          ? _brightnessBaseBytes!
-          : ImageOps.adjustBrightness(_brightnessBaseBytes!, _brightness);
+      _latestBrightnessValue = _brightness; // 🔹 상태 먼저 갱신
+      final composed = _composeAdjustments(base); // 🔹 누적 합성
 
       setState(() {
-        _editedBytes = out;
+        _editedBytes = composed;
         _dirty = true;
       });
 
-      _latestBrightnessValue = _brightness;
       await _sendOp('brightness', {'value': _brightness});
     } finally {
       _brightnessApplying = false;
@@ -1737,7 +1744,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
-    await _reapplyBrightnessIfActive();
+    await _reapplyAdjustmentsIfActive();
 
     await _sendOp('rotate', {'deg': deg});
   }
@@ -1751,7 +1758,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _flipHState = !_flipHState;
-    await _reapplyBrightnessIfActive();
+    await _reapplyAdjustmentsIfActive();
 
     await _sendOp('flip', {'dir': 'h'});
   }
@@ -1765,7 +1772,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _flipVState = !_flipVState;
-    await _reapplyBrightnessIfActive();
+    await _reapplyAdjustmentsIfActive();
 
     await _sendOp('flip', {'dir': 'v'});
   }
