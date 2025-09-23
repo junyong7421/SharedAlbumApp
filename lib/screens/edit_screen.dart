@@ -12,6 +12,13 @@ import '../widgets/user_icon_button.dart';
 import '../services/shared_album_service.dart';
 import '../services/shared_album_list_service.dart'; // ✅ uid→이름 변환용
 
+import 'dart:typed_data';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
+import 'package:photo_manager/photo_manager.dart';
+
 // ===================== UID → 항상 같은 색 (안정 랜덤) =====================
 int _stableHash(String s) {
   int h = 5381;
@@ -66,7 +73,7 @@ class SegmentedHeart extends StatelessWidget {
 }
 
 class _HeartPainter extends CustomPainter {
-  final int totalSlots;           // m명이면 m
+  final int totalSlots; // m명이면 m
   final List<Color> filledColors; // 길이=m
   final Color outlineColor;
 
@@ -153,7 +160,8 @@ class _HeartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _HeartPainter old) {
-    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor) return true;
+    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor)
+      return true;
     if (filledColors.length != old.filledColors.length) return true;
     for (var i = 0; i < filledColors.length; i++) {
       if (filledColors[i].value != old.filledColors[i].value) return true;
@@ -180,10 +188,14 @@ class HeartForPhoto extends StatelessWidget {
     required this.myUid,
   });
 
-  Future<void> _showLikedByPopup(BuildContext context, List<String> likedUids) async {
+  Future<void> _showLikedByPopup(
+    BuildContext context,
+    List<String> likedUids,
+  ) async {
     // 앨범 멤버 조회로 uid→이름 매핑
-    final members =
-        await SharedAlbumListService.instance.fetchAlbumMembers(albumId);
+    final members = await SharedAlbumListService.instance.fetchAlbumMembers(
+      albumId,
+    );
     final names = members
         .where((m) => likedUids.contains(m.uid))
         .map((m) => (m.name).trim().isEmpty ? m.email : m.name)
@@ -245,8 +257,9 @@ class HeartForPhoto extends StatelessWidget {
               );
             } catch (e) {
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
             }
           },
           onTapCount: () => _showLikedByPopup(context, likedUids),
@@ -1192,99 +1205,249 @@ class _EditScreenState extends State<EditScreen> {
     );
   }
 
+  Future<void> _downloadEditedPhoto(String url) async {
+    try {
+      // 1) 사진 권한 요청/확인 (Android 13+: Photos, 이하: 저장소)
+      final PermissionState ps = await PhotoManager.requestPermissionExtend();
+      if (!ps.hasAccess) {
+        // 설정으로 바로 안내
+        if (!mounted) return;
+        final go = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('권한이 필요합니다'),
+            content: const Text('갤러리에 저장하려면 사진 권한이 필요해요. 설정에서 허용해 주세요.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('취소'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('설정 열기'),
+              ),
+            ],
+          ),
+        );
+
+        if (go == true) {
+          // photo_manager나 permission_handler 아무거나 사용 가능
+          // await openAppSettings(); // (permission_handler)
+          await PhotoManager.openSetting();
+        }
+        return;
+      }
+
+      // 2) 이미지 다운로드
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        throw '다운로드 실패(${res.statusCode})';
+      }
+
+      // 3) 갤러리에 저장 (filename 필수)
+      final bytes = Uint8List.fromList(res.bodyBytes);
+      final filename =
+          'SharedAlbum_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      final asset = await PhotoManager.editor.saveImage(
+        bytes,
+        filename: filename,
+      );
+
+      final ok = asset != null;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ok ? '갤러리에 저장했어요.' : '저장에 실패했습니다.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('다운로드 오류: $e')));
+      }
+    }
+  }
+
   // 하단 액션: 편집된 사진 탭 시
   void _showEditedActions(BuildContext context, EditedPhoto item) {
     showModalBottomSheet(
       context: context,
+      backgroundColor: Colors.transparent,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) {
         return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.edit),
-                title: const Text('편집하기'),
-                onTap: () async {
-                  Navigator.pop(context);
-
-                  if (_isNavigating) return;
-                  _isNavigating = true;
-
-                  try {
-                    await _svc.setEditing(
-                      uid: _uid,
-                      albumId: widget.albumId,
-                      // 편집본 열 때도 photoId를 원본 id로 채움 → 집계 일관성
-                      photoId: (item.originalPhotoId ?? '').isNotEmpty
-                          ? item.originalPhotoId
-                          : null,
-                      photoUrl: item.url,
-                      source: 'edited',
-                      editedId: item.id,
-                      originalPhotoId: ((item.originalPhotoId ?? '').isNotEmpty)
-                          ? item.originalPhotoId
-                          : null,
-                      // 👇 이름 저장
-                      userDisplayName: _meName,
-                    );
-                  } catch (e) {
-                    _isNavigating = false;
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text('편집 세션 생성 실패: $e')));
-                    return;
-                  }
-
-                  if (!mounted) {
-                    _isNavigating = false;
-                    return;
-                  }
-
-                  await Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => EditViewScreen(
-                        albumName: widget.albumName,
-                        albumId: widget.albumId,
-                        imagePath: item.url,
-                        editedId: item.id,
-                      ),
-                    ),
-                  );
-
-                  _isNavigating = false;
-                },
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF6F9FF).withOpacity(0.95),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: const Color(0xFF625F8C), width: 2),
               ),
-              ListTile(
-                leading: const Icon(Icons.delete_outline),
-                title: const Text('삭제'),
-                onTap: () async {
-                  Navigator.pop(context);
-                  try {
-                    await _svc.deleteEditedPhoto(
-                      albumId: widget.albumId,
-                      editedId: item.id,
-                    );
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('편집된 사진을 삭제했습니다.')),
-                    );
-                  } catch (e) {
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
-                  }
-                },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 편집하기
+                  _ActionRow(
+                    iconPath: 'assets/icons/edit.png',
+                    label: '편집하기',
+                    onTap: () async {
+                      Navigator.pop(context);
+                      if (_isNavigating) return;
+                      _isNavigating = true;
+                      try {
+                        await _svc.setEditing(
+                          uid: _uid,
+                          albumId: widget.albumId,
+                          photoId: (item.originalPhotoId ?? '').isNotEmpty
+                              ? item.originalPhotoId
+                              : null,
+                          photoUrl: item.url,
+                          source: 'edited',
+                          editedId: item.id,
+                          originalPhotoId:
+                              ((item.originalPhotoId ?? '').isNotEmpty)
+                              ? item.originalPhotoId
+                              : null,
+                          userDisplayName: _meName,
+                        );
+                        if (!mounted) {
+                          _isNavigating = false;
+                          return;
+                        }
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => EditViewScreen(
+                              albumName: widget.albumName,
+                              albumId: widget.albumId,
+                              imagePath: item.url,
+                              editedId: item.id,
+                            ),
+                          ),
+                        );
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('편집 세션 생성 실패: $e')),
+                          );
+                        }
+                      } finally {
+                        _isNavigating = false;
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 다운로드
+                  _ActionRow(
+                    iconPath: 'assets/icons/download.png',
+                    label: '다운로드',
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _downloadEditedPhoto(item.url);
+                    },
+                  ),
+                  const SizedBox(height: 14),
+
+                  // 삭제 (아이콘 이름 확인: delete.png 또는 delete_png.png)
+                  _ActionRow(
+                    iconPath: 'assets/icons/delete_.png', // ← 실제 파일명에 맞추세요
+                    label: '삭제',
+                    onTap: () async {
+                      Navigator.pop(context);
+                      try {
+                        await _svc.deleteEditedPhoto(
+                          albumId: widget.albumId,
+                          editedId: item.id,
+                        );
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('편집된 사진을 삭제했습니다.')),
+                        );
+                      } catch (e) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(
+                          context,
+                        ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
+                      }
+                    },
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         );
       },
+    );
+  }
+}
+
+/// 아이템 한 줄 (아이콘 + 그라데이션 버튼)
+class _ActionRow extends StatelessWidget {
+  final String iconPath;
+  final String label;
+  final VoidCallback onTap;
+  const _ActionRow({
+    required this.iconPath,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF5CFFF),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Center(
+            child: Image.asset(
+              iconPath,
+              width: 22,
+              height: 22,
+              fit: BoxFit.contain,
+            ),
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: InkWell(
+            borderRadius: BorderRadius.circular(22),
+            onTap: onTap,
+            child: Container(
+              height: 48,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [
+                    Color(0xFFC6DCFF),
+                    Color(0xFFD2D1FF),
+                    Color(0xFFF5CFFF),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: const Color(0xFF625F8C), width: 1.5),
+              ),
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
