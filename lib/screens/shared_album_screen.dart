@@ -7,9 +7,11 @@ import 'dart:math';
 import 'dart:math' as math; // math.pi, math.min 등
 import 'package:vector_math/vector_math_64.dart' as vmath; // Matrix4
 import 'package:cloud_firestore/cloud_firestore.dart';
-
 // 서비스 + 모델 (Album, Photo 포함)
 import '../services/shared_album_service.dart';
+import 'package:http/http.dart' as http;
+import 'package:photo_manager/photo_manager.dart';
+import 'dart:typed_data'; // [추가] saveImage에 필요
 
 class SharedAlbumScreen extends StatefulWidget {
   const SharedAlbumScreen({super.key});
@@ -294,6 +296,64 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
+    }
+  }
+
+  Future<void> _downloadOriginalPhoto(String url) async {
+    try {
+      // 1) 사진 권한 요청
+      final PermissionState ps = await PhotoManager.requestPermissionExtend();
+      if (!ps.hasAccess) {
+        if (!mounted) return;
+        final go = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('권한이 필요합니다'),
+            content: const Text('갤러리에 저장하려면 사진 권한이 필요해요. 설정에서 허용해 주세요.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('취소'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('설정 열기'),
+              ),
+            ],
+          ),
+        );
+        if (go == true) {
+          await PhotoManager.openSetting();
+        }
+        return;
+      }
+
+      // 2) 다운로드
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) {
+        throw '다운로드 실패(${res.statusCode})';
+      }
+
+      // 3) 갤러리 저장
+      final bytes = res.bodyBytes;
+      final filename =
+          'SharedAlbum_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final asset = await PhotoManager.editor.saveImage(
+        Uint8List.fromList(bytes),
+        filename: filename,
+      );
+      final ok = asset != null;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(ok ? '갤러리에 저장했어요.' : '저장에 실패했습니다.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('다운로드 오류: $e')));
+      }
     }
   }
 
@@ -915,48 +975,70 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                   bottom: 10,
                                   right: 4,
                                 ),
-                                child: Row(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment
+                                      .end, // **[추가] 오른쪽 정렬 유지**
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    // 버튼 1줄 (폭이 부족하면 자동 줄바꿈)
+                                    Wrap(
+                                      // **[변경] Row → Wrap**
+                                      alignment: WrapAlignment.end, // **[추가]**
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center, // **[추가]**
+                                      spacing: 8, // **[추가] 버튼 간 간격**
+                                      runSpacing: 8, // **[추가] 줄바꿈 시 세로 간격**
+                                      children: [
+                                        GestureDetector(
+                                          onTap: () => _openEditor(
+                                            photo: p,
+                                            albumId: albumId,
+                                            albumTitle: title,
+                                          ),
+                                          child: _pill("편집하기"),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () async {
+                                            await _downloadOriginalPhoto(p.url);
+                                          },
+                                          child: _pill("다운로드"),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () async {
+                                            try {
+                                              await _svc.deletePhoto(
+                                                uid: _uid,
+                                                albumId: albumId,
+                                                photoId: p.id,
+                                              );
+                                            } catch (e) {
+                                              if (!mounted) return;
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('삭제 실패: $e'),
+                                                ),
+                                              );
+                                            }
+                                          },
+                                          child: _pill("삭제"),
+                                        ),
+                                      ],
+                                    ),
+
+                                    const SizedBox(
+                                      height: 8,
+                                    ), // **[추가] 버튼줄과 하트줄 간격**
+                                    // 하트 배지: 아래 줄에 분리
                                     _LikeBadge(
+                                      // **[추가]**
                                       likedUids: p.likedBy,
                                       myUid: _uid,
                                       albumId: albumId,
                                       photoId: p.id,
                                       svc: _svc,
                                       colorForUid: colorForUid,
-                                    ),
-                                    const SizedBox(width: 12),
-
-                                    GestureDetector(
-                                      onTap: () => _openEditor(
-                                        photo: p,
-                                        albumId: albumId,
-                                        albumTitle: title,
-                                      ),
-                                      child: _pill("편집하기"),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    GestureDetector(
-                                      onTap: () async {
-                                        try {
-                                          await _svc.deletePhoto(
-                                            uid: _uid,
-                                            albumId: albumId,
-                                            photoId: p.id,
-                                          );
-                                        } catch (e) {
-                                          if (!mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text('삭제 실패: $e'),
-                                            ),
-                                          );
-                                        }
-                                      },
-                                      child: _pill("삭제"),
                                     ),
                                   ],
                                 ),
