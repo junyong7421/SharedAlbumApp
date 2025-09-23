@@ -775,6 +775,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
   return Column(
     children: [
+      // 상단 바
       Row(
         children: [
           IconButton(
@@ -812,10 +813,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                 _showRenameAlbumDialog(albumId: albumId, currentTitle: title),
           ),
           IconButton(
-            icon: const Icon(
-              Icons.add_photo_alternate,
-              color: Color(0xFF625F8C),
-            ),
+            icon: const Icon(Icons.add_photo_alternate, color: Color(0xFF625F8C)),
             tooltip: '사진 추가',
             onPressed: () => _addPhotos(albumId),
           ),
@@ -823,6 +821,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
       ),
       const SizedBox(height: 8),
 
+      // 앨범 문서 + 사진들
       Expanded(
         child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: albumDocRef.snapshots(),
@@ -843,13 +842,6 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                 child: CircularProgressIndicator(color: Color(0xFF625F8C)),
               );
             }
-            final albumData = albumSnap.data!.data()!;
-            final List<String> albumMembers =
-                ((albumData['memberUids'] ?? []) as List)
-                    .map((e) => e.toString())
-                    .toList();
-
-            final totalSlots = max(1, min(albumMembers.length, 12));
 
             return StreamBuilder<List<Photo>>(
               stream: _svc.watchPhotos(uid: _uid, albumId: albumId),
@@ -870,9 +862,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
 
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(
-                    child: CircularProgressIndicator(
-                      color: Color(0xFF625F8C),
-                    ),
+                    child: CircularProgressIndicator(color: Color(0xFF625F8C)),
                   );
                 }
 
@@ -881,37 +871,22 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                   return const Center(
                     child: Text(
                       '사진이 없습니다',
-                      style: TextStyle(
-                        color: Color(0xFF625F8C),
-                        fontSize: 16,
-                      ),
+                      style: TextStyle(color: Color(0xFF625F8C), fontSize: 16),
                     ),
                   );
                 }
 
+                // ===================== 썸네일 그리드 =====================
                 if (_selectedImageIndex == null) {
-                  // ===================== 그리드(썸네일) =====================
                   return GridView.builder(
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          crossAxisSpacing: 8,
-                          mainAxisSpacing: 8,
-                        ),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
+                    ),
                     itemCount: photos.length,
                     itemBuilder: (context, i) {
                       final p = photos[i];
-                      final likedUids = p.likedBy;
-                      final isLikedByMe = likedUids.contains(_uid);
-                      final likedColors = likedUids
-                          .map((u) => colorForUid(u))
-                          .toList();
-
-                      final m = likedUids.length;
-                      final totalSlotsForRender = m == 0
-                          ? 0
-                          : (m > 12 ? 12 : m);
-
                       return GestureDetector(
                         onTap: () => setState(() => _selectedImageIndex = i),
                         child: Stack(
@@ -935,7 +910,7 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                 photoId: p.id,
                                 svc: _svc,
                                 colorForUid: colorForUid,
-                                isEdited: false, // 🔹 원본(공유앨범) 좋아요
+                                isEdited: false, // 원본(공유앨범)
                               ),
                             ),
                           ],
@@ -943,38 +918,72 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                       );
                     },
                   );
-                } else {
-                  // ===================== 큰 사진 (PageView) =====================
-                  final controller = PageController(
-                    initialPage: _selectedImageIndex!,
-                  );
-                  return PageView.builder(
-                    controller: controller,
-                    itemCount: photos.length,
-                    onPageChanged: (i) =>
-                        setState(() => _selectedImageIndex = i),
-                    itemBuilder: (context, i) {
-                      final p = photos[i];
-                      final likedUids = p.likedBy;
-                      final isLikedByMe = likedUids.contains(_uid);
-                      final likedColors = likedUids
-                          .map((u) => colorForUid(u))
-                          .toList();
+                }
 
-                      final m = likedUids.length;
-                      final totalSlotsForRender = m == 0
-                          ? 0
-                          : (m > 12 ? 12 : m);
+                // ===================== 큰 사진 (PageView) =====================
+                final controller = PageController(initialPage: _selectedImageIndex!);
 
-                        return Column(
+                return PageView.builder(
+                  controller: controller,
+                  itemCount: photos.length,
+                  onPageChanged: (i) => setState(() => _selectedImageIndex = i),
+                  itemBuilder: (context, i) {
+                    final p = photos[i];
+
+                    return Column(
   children: [
     Align(
       alignment: Alignment.topRight,
       child: Padding(
         padding: const EdgeInsets.only(bottom: 10, right: 4),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,
           children: [
+            // 🔹 버튼줄 (폭 좁으면 줄바꿈 가능)
+            Wrap(
+              alignment: WrapAlignment.end,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                GestureDetector(
+                  onTap: () => _openEditor(
+                    photo: p,
+                    albumId: albumId,
+                    albumTitle: title,
+                  ),
+                  child: _pill("편집하기"),
+                ),
+                GestureDetector(
+                  onTap: () async {
+                    await _downloadOriginalPhoto(p.url);
+                  },
+                  child: _pill("다운로드"),
+                ),
+                GestureDetector(
+                  onTap: () async {
+                    try {
+                      await _svc.deletePhoto(
+                        uid: _uid,
+                        albumId: albumId,
+                        photoId: p.id,
+                      );
+                    } catch (e) {
+                      if (!mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('삭제 실패: $e')),
+                      );
+                    }
+                  },
+                  child: _pill("삭제"),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 8),
+
+            // 🔹 하트 배지 줄 (좋아요/팝업)
             _LikeBadge(
               likedUids: p.likedBy,
               myUid: _uid,
@@ -984,46 +993,12 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
               colorForUid: colorForUid,
               isEdited: false, // ✅ 원본 사진
             ),
-            const SizedBox(width: 12),
-
-            GestureDetector(
-              onTap: () => _openEditor(
-                photo: p,
-                albumId: albumId,
-                albumTitle: title,
-              ),
-              child: _pill("편집하기"),
-            ),
-            const SizedBox(width: 8),
-
-            // 필요하면 다운로드 버튼 추가 가능
-            // GestureDetector(
-            //   onTap: () async => await _downloadOriginalPhoto(p.url),
-            //   child: _pill("다운로드"),
-            // ),
-            // const SizedBox(width: 8),
-
-            GestureDetector(
-              onTap: () async {
-                try {
-                  await _svc.deletePhoto(
-                    uid: _uid,
-                    albumId: albumId,
-                    photoId: p.id,
-                  );
-                } catch (e) {
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('삭제 실패: $e')),
-                  );
-                }
-              },
-              child: _pill("삭제"),
-            ),
           ],
         ),
       ),
     ),
+
+    // 큰 사진 뷰어
     Expanded(
       child: ClipRRect(
         borderRadius: BorderRadius.circular(20),
@@ -1036,6 +1011,18 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
     ),
   ],
 );
+
+                  },
+                );
+              },
+            );
+          },
+        ),
+      ),
+    ],
+  );
+}
+
 
 
   // ---------------------- Small UI helpers ----------------------
