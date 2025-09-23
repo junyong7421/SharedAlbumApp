@@ -1,26 +1,34 @@
 import 'package:flutter/material.dart';
 import '../screens/login_choice_screen.dart';
 
-// [변경] Firebase/GoogleSignIn 추가
+// [유지] Firebase/GoogleSignIn
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 class UserIconButton extends StatelessWidget {
-  const UserIconButton({super.key});
+  // ===================== 변경 포인트 =====================
+  // [추가] 구글 프로필 사진 URL(없으면 에셋/아이콘으로 폴백)
+  final String? photoUrl;
 
-  // [변경] 완전 로그아웃 함수: Firebase + Google 세션 해제
+  // [추가] 크기 커스터마이즈(기본 48)
+  final double radius;
+
+  const UserIconButton({
+    super.key,
+    this.photoUrl,        // [추가]
+    this.radius = 24,     // [추가]
+  });
+  // =====================================================
+
+  // [유지] 완전 로그아웃
   Future<void> _signOutCompletely() async {
     try {
-      // FirebaseAuth 로그아웃
       await FirebaseAuth.instance.signOut();
 
-      // GoogleSignIn 연결 해제 및 로그아웃
       final g = GoogleSignIn();
       try {
         await g.disconnect(); // 토큰 revoke
-      } catch (_) {
-        // 이미 연결이 없을 수 있어 무시
-      }
+      } catch (_) { /* 연결 없을 수 있음 */ }
       await g.signOut();
     } catch (e) {
       debugPrint('로그아웃 실패: $e');
@@ -63,9 +71,9 @@ class UserIconButton extends StatelessWidget {
                     _buildGradientActionButton("취소", () {
                       Navigator.pop(context);
                     }),
-                    // [변경] 확인: 완전 로그아웃 후 로그인 화면으로 이동
+                    // [유지] 확인: 완전 로그아웃 후 로그인 화면으로 이동
                     _buildGradientActionButton("확인", () async {
-                      await _signOutCompletely(); // [변경]
+                      await _signOutCompletely();
                       if (context.mounted) {
                         Navigator.pushAndRemoveUntil(
                           context,
@@ -112,13 +120,29 @@ class UserIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // ===================== 변경 포인트 =====================
+    // [변경] 항상 같은 버튼이지만, 이미지 표현은 photoUrl 우선
     return GestureDetector(
       onTap: () => _showLogoutDialog(context),
-      child: Image.asset(
-        'assets/icons/user.png',
-        width: 50,
-        height: 50,
+      child: CircleAvatar(
+        radius: radius,
+        backgroundImage: (photoUrl != null && photoUrl!.isNotEmpty)
+            ? NetworkImage(photoUrl!)
+            : null,
+        backgroundColor: const Color(0xFFD9E2FF),
+        child: (photoUrl == null || photoUrl!.isEmpty)
+            // [변경] photoUrl 없으면 기존 에셋(또는 아이콘)로 폴백
+            ? ClipOval(
+                child: Image.asset(
+                  'assets/icons/user.png', // 기존 에셋 유지
+                  width: radius * 2,
+                  height: radius * 2,
+                  fit: BoxFit.cover,
+                ),
+              )
+            : null,
       ),
     );
+    // =====================================================
   }
 }

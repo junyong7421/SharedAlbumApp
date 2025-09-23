@@ -66,7 +66,7 @@ class SegmentedHeart extends StatelessWidget {
 }
 
 class _HeartPainter extends CustomPainter {
-  final int totalSlots;           // m명이면 m
+  final int totalSlots; // m명이면 m
   final List<Color> filledColors; // 길이=m
   final Color outlineColor;
 
@@ -153,7 +153,8 @@ class _HeartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _HeartPainter old) {
-    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor) return true;
+    if (totalSlots != old.totalSlots || outlineColor != old.outlineColor)
+      return true;
     if (filledColors.length != old.filledColors.length) return true;
     for (var i = 0; i < filledColors.length; i++) {
       if (filledColors[i].value != old.filledColors[i].value) return true;
@@ -180,10 +181,14 @@ class HeartForPhoto extends StatelessWidget {
     required this.myUid,
   });
 
-  Future<void> _showLikedByPopup(BuildContext context, List<String> likedUids) async {
+  Future<void> _showLikedByPopup(
+    BuildContext context,
+    List<String> likedUids,
+  ) async {
     // 앨범 멤버 조회로 uid→이름 매핑
-    final members =
-        await SharedAlbumListService.instance.fetchAlbumMembers(albumId);
+    final members = await SharedAlbumListService.instance.fetchAlbumMembers(
+      albumId,
+    );
     final names = members
         .where((m) => likedUids.contains(m.uid))
         .map((m) => (m.name).trim().isEmpty ? m.email : m.name)
@@ -245,8 +250,9 @@ class HeartForPhoto extends StatelessWidget {
               );
             } catch (e) {
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
             }
           },
           onTapCount: () => _showLikedByPopup(context, likedUids),
@@ -569,7 +575,14 @@ class _EditScreenState extends State<EditScreen> {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          const UserIconButton(),
+                          // ✅ **[변경]** 리스트의 const 제거 + **[추가]** photoUrl 전달
+                          UserIconButton(
+                            photoUrl: FirebaseAuth
+                                .instance
+                                .currentUser
+                                ?.photoURL, // **[추가]**
+                            radius: 24, // **[유지/선택]**
+                          ),
                           const SizedBox(width: 10),
                           const Text(
                             '편집',
@@ -607,7 +620,7 @@ class _EditScreenState extends State<EditScreen> {
                         ],
                       ),
                     ),
-
+                    
                     const SizedBox(height: 20),
 
                     // 편집 목록 버튼

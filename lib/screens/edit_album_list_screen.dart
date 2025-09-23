@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../widgets/custom_bottom_nav_bar.dart';
 import '../services/shared_album_service.dart';
 import 'edit_screen.dart';
+import '../widgets/user_icon_button.dart';
 
 class EditAlbumListScreen extends StatefulWidget {
   const EditAlbumListScreen({super.key});
@@ -32,7 +33,10 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  _buildUserAvatar(),
+                  UserIconButton(
+                    photoUrl: FirebaseAuth.instance.currentUser?.photoURL,
+                    radius: 24,
+                  ),
                   const SizedBox(width: 10),
                   const Text(
                     '편집',
@@ -58,7 +62,9 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return const Center(
-                        child: CircularProgressIndicator(color: Color(0xFF625F8C)),
+                        child: CircularProgressIndicator(
+                          color: Color(0xFF625F8C),
+                        ),
                       );
                     }
 
@@ -80,7 +86,10 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                       return const Center(
                         child: Text(
                           '편집 가능한 공유앨범이 없습니다',
-                          style: TextStyle(color: Color(0xFF625F8C), fontSize: 16),
+                          style: TextStyle(
+                            color: Color(0xFF625F8C),
+                            fontSize: 16,
+                          ),
                         ),
                       );
                     }
@@ -103,7 +112,10 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                             onTap: () => _openEdit(album),
                             child: Container(
                               margin: const EdgeInsets.symmetric(horizontal: 8),
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 16,
+                              ),
                               decoration: BoxDecoration(
                                 color: Colors.white,
                                 borderRadius: BorderRadius.circular(18),
@@ -119,7 +131,8 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                                   const SizedBox(width: 16),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
@@ -139,19 +152,25 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                                             const SizedBox(width: 6),
                                             // 🔽 여기 변경: 세션 수가 아니라 "편집중인 사진 개수(중복 제거, active+paused 포함)"
                                             FutureBuilder<List<String>>(
-                                              future: _svc.fetchEditingPhotoIds(album.id),
+                                              future: _svc.fetchEditingPhotoIds(
+                                                album.id,
+                                              ),
                                               builder: (context, s) {
-                                                if (s.connectionState == ConnectionState.waiting) {
+                                                if (s.connectionState ==
+                                                    ConnectionState.waiting) {
                                                   return const SizedBox.shrink();
                                                 }
                                                 if (s.hasError) {
                                                   return const SizedBox.shrink();
                                                 }
-                                                final ids = s.data ?? const <String>[];
+                                                final ids =
+                                                    s.data ?? const <String>[];
                                                 if (ids.isEmpty) {
                                                   return const SizedBox.shrink();
                                                 }
-                                                return _chipEditing('편집중 ${ids.length}');
+                                                return _chipEditing(
+                                                  '편집중 ${ids.length}',
+                                                );
                                               },
                                             ),
                                           ],
@@ -189,7 +208,9 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
     final photo = user?.photoURL;
     return CircleAvatar(
       radius: 24,
-      backgroundImage: (photo != null && photo.isNotEmpty) ? NetworkImage(photo) : null,
+      backgroundImage: (photo != null && photo.isNotEmpty)
+          ? NetworkImage(photo)
+          : null,
       backgroundColor: const Color(0xFFD9E2FF),
       child: (photo == null || photo.isEmpty)
           ? const Icon(Icons.person, color: Color(0xFF625F8C))
@@ -234,10 +255,7 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => EditScreen(
-          albumName: album.title,
-          albumId: album.id,
-        ),
+        builder: (_) => EditScreen(albumName: album.title, albumId: album.id),
       ),
     );
     if (!mounted) return;
