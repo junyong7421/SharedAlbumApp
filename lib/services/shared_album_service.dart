@@ -10,9 +10,13 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 
-/// =========================
-///  Top-level helper types
-/// =========================
+import 'package:http/http.dart' as http;                 // [추가]
+import 'package:path_provider/path_provider.dart';        // [추가]
+import 'package:image_gallery_saver/image_gallery_saver.dart';     // [추가]
+import 'package:permission_handler/permission_handler.dart'; // [추가]
+import 'package:path/path.dart' as p;                     // [추가]
+import 'dart:typed_data';
+
 
 // [추가] 클래스 밖(top-level)에 선언: ops 커서(초기 캐치업 + 꼬리 스트림용)
 class OpsCursor {
@@ -585,6 +589,66 @@ class SharedAlbumService {
     );
   }
 
+Future<bool> _ensureSavePermission() async {
+  if (Platform.isAndroid) {
+    // Android 13+: photos, 12↓: storage
+    final photos = await Permission.photos.request();
+    final storage = await Permission.storage.request();
+    return photos.isGranted || storage.isGranted;
+  } else if (Platform.isIOS) {
+    final addOnly = await Permission.photosAddOnly.request();
+    if (addOnly.isGranted) return true;
+    final photos = await Permission.photos.request();
+    return photos.isGranted;
+  }
+  return true; // 기타 플랫폼
+}
+
+  // ======================= [추가] 사진 다운로드 저장 ========================
+Future<void> downloadPhotoToDevice({
+  required String url,
+  String? fileName,
+}) async {
+  // 권한 요청
+  final ok = await _ensureSavePermission();
+  if (!ok) {
+    throw '저장 권한이 거부되었습니다. 설정에서 사진/미디어 권한을 허용해주세요.';
+  }
+
+  // 파일명/확장자 추출
+  final uri = Uri.parse(url);
+  final urlName = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : null;
+  final extFromUrl = _extFromPath(urlName ?? '') ?? 'png';
+  final baseName = (fileName ?? urlName ?? 'SharedAlbum_${DateTime.now().millisecondsSinceEpoch}')
+      .replaceAll(RegExp(r'[^\w\.\-]'), '_');
+  final finalNameNoExt = p.basenameWithoutExtension(baseName);
+
+  // 바이트 다운로드
+  final resp = await http.get(uri);
+  if (resp.statusCode != 200) {
+    throw '이미지 다운로드 실패 (${resp.statusCode})';
+  }
+  final bytes = Uint8List.fromList(resp.bodyBytes);
+
+  // 갤러리에 저장
+  final result = await ImageGallerySaver.saveImage(
+    bytes,
+    name: '${finalNameNoExt}_${DateTime.now().millisecondsSinceEpoch}',
+  );
+
+  final success = (result is Map) && (result['isSuccess'] == true);
+  if (!success) {
+    // 폴백: 파일로 저장 후 다시 시도
+    final tempDir = await getTemporaryDirectory();
+    final tempPath = p.join(tempDir.path, '$finalNameNoExt.$extFromUrl');
+    final f = File(tempPath);
+    await f.writeAsBytes(bytes);
+    final result2 = await ImageGallerySaver.saveFile(f.path);
+    final success2 = (result2 is Map) && (result2['isSuccess'] == true);
+    if (!success2) throw '갤러리 저장에 실패했어요.';
+  }
+}
+
   Future<void> toggleLike({
     required String uid,
     required String albumId,
@@ -1035,7 +1099,6 @@ class SharedAlbumService {
 
       if (rootPhotoId != null) 'rootPhotoId': rootPhotoId, // [추가][root]
     });
-
     await _albumDoc(albumId)
         .update({'updatedAt': FieldValue.serverTimestamp()});
 

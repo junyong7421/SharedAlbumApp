@@ -23,6 +23,9 @@ dependencies:
   cloud_functions: ^5.6.2       # [병합] 최신 버전 선택
   livekit_client: ^2.5.1        # [병합] 추가
   flutter_webrtc: ^1.2.0        # [병합] 추가
+  permission_handler: ^12.0.1
+  path: ^1.9.1
+  image_gallery_saver: ^2.0.3
 
 dev_dependencies:
   flutter_test:

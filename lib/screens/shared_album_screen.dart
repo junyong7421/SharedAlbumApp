@@ -362,8 +362,8 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                   // [변경] UserIconButton에 photoUrl 전달 (로그아웃 다이얼로그 기능 그대로)
                   UserIconButton(
                     photoUrl:
-                        FirebaseAuth.instance.currentUser?.photoURL, // [추가]
-                    radius: 24, // [유지/선택]
+                        FirebaseAuth.instance.currentUser?.photoURL, // [유지]
+                    radius: 24,
                   ),
                   const SizedBox(width: 10),
                   const Text(
@@ -936,6 +936,37 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
                                       ),
                                       child: _pill("편집하기"),
                                     ),
+
+                                    const SizedBox(width: 8),
+
+                                    // ===================== [추가] 다운로드 버튼 =====================
+                                    GestureDetector(
+                                      onTap: () async {
+                                        try {
+                                          await _svc.downloadPhotoToDevice(
+                                            url: p.url, // 원본 이미지 URL
+                                          );
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            const SnackBar(
+                                              content: Text('갤러리에 저장했어요.'),
+                                            ),
+                                          );
+                                        } catch (e) {
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                              content: Text('저장 실패: $e'),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                      child: _pill("다운로드"), // [추가]
+                                    ),
+                                    // ===================== [추가] 끝 =====================
+
                                     const SizedBox(width: 8),
                                     GestureDetector(
                                       onTap: () async {
@@ -1133,8 +1164,6 @@ class _LikeBadge extends StatelessWidget {
           // 숫자 동그라미 (탭 = 팝업)
           GestureDetector(
             onTap: () async {
-              // 부모 State의 메서드를 그대로 쓴다면: context.findAncestorStateOfType 등으로 호출해도 되지만
-              // SharedAlbumScreen의 private 메서드를 그대로 쓰고 있으므로 간단히 showDialog를 이 안에서 구현
               final liked = likedUids; // 캡처
               if (liked.isEmpty) {
                 await showDialog(

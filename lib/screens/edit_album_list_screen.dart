@@ -43,7 +43,7 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF625F8C),
+                      color: Color(0xFF625F8C), 
                     ),
                   ),
                 ],
