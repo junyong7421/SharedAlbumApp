@@ -82,6 +82,7 @@ class _HeartPainter extends CustomPainter {
     required this.filledColors,
     required this.outlineColor,
   });
+  
 
   // Material favorite(24x24)과 유사한 하트 Path
   // *정확히 동일 좌표가 아니더라도 아이콘스러운 '진짜 하트' 실루엣입니다.
@@ -255,7 +256,7 @@ await svc.toggleLike(
   albumId: albumId,
   photoId: photoId,
   like: !isLikedByMe,
-  isEdited: true, // 🔹 원본에서는 false
+  isEdited: false, // 🔹 원본에서는 false
 );
 
             } catch (e) {
@@ -494,6 +495,44 @@ class _EditScreenState extends State<EditScreen> {
     final short = uid.length > 4 ? uid.substring(uid.length - 4) : uid;
     return _nameCache[uid] = '사용자-$short';
   }
+
+  Future<void> _showLikedByPopup(List<String> likedUids) async {
+  // users/{uid}에서 이름 가져오기 (10개씩 whereIn)
+  final fs = FirebaseFirestore.instance;
+  final names = <String>[];
+  try {
+    for (int i = 0; i < likedUids.length; i += 10) {
+      final chunk = likedUids.skip(i).take(10).toList();
+      final qs = await fs
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: chunk)
+          .get();
+      for (final d in qs.docs) {
+        final m = d.data();
+        final n = (m['displayName'] ?? m['name'] ?? '').toString().trim();
+        if (n.isNotEmpty) {
+          names.add(n);
+        } else {
+          final short = d.id.length > 4 ? d.id.substring(d.id.length - 4) : d.id;
+          names.add('사용자-$short');
+        }
+      }
+    }
+  } catch (_) {
+    // 실패하면 uid 끝4자리 fallback
+    for (final u in likedUids) {
+      final short = u.length > 4 ? u.substring(u.length - 4) : u;
+      names.add('사용자-$short');
+    }
+  }
+
+  if (!mounted) return;
+  await showDialog(
+    context: context,
+    builder: (_) => LikedByPopup(memberNames: names),
+  );
+}
+
 
   // 처음 들어간(lead) 편집자 고르기: startedAt → updatedAt → uid 안정 정렬
   EditingInfo _pickLeadEditor(List<EditingInfo> editors) {
@@ -1139,16 +1178,17 @@ class _EditScreenState extends State<EditScreen> {
 
         // 🟢 편집본 자체의 좋아요 하트 (edited/{editedId} 문서를 바라봄)
         Positioned(
-          top: -6,
-          right: -6,
-          child: HeartForEdited(
-            albumId: widget.albumId, // nullable이면 widget.albumId! 로
-            editedId: it.id,         // 편집본 문서 ID
-            size: 20,
-            svc: _svc,
-            myUid: _uid,
-          ),
-        ),
+  top: -6,
+  right: -6,
+  child: _EditedLikeBadge(
+    albumId: widget.albumId,
+    editedId: it.id,
+    myUid: _uid,
+    svc: _svc,
+    colorForUid: colorForUid,                // 위에 있는 UID→Color 함수 재사용
+    onShowLikers: (uids) => _showLikedByPopup(uids), // 숫자/롱프레스 시 팝업
+  ),
+),
       ],
     );
   },
@@ -1491,6 +1531,107 @@ class HeartForEdited extends StatelessWidget {
             count: likedBy.length,
             liked: isLiked,
             size: size,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _EditedLikeBadge extends StatelessWidget {
+  final String albumId;
+  final String editedId;
+  final String myUid;
+  final SharedAlbumService svc;
+  final Color Function(String uid) colorForUid;
+  final int maxSlices;
+  final void Function(List<String> uids) onShowLikers;
+
+  const _EditedLikeBadge({
+    required this.albumId,
+    required this.editedId,
+    required this.myUid,
+    required this.svc,
+    required this.colorForUid,
+    required this.onShowLikers,
+    this.maxSlices = 12,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Set<String>>(
+      stream: svc.watchEditedLikedBy(albumId: albumId, editedId: editedId),
+      builder: (context, snap) {
+        final likedSet = snap.data ?? const <String>{};
+        final likedUids = likedSet.toList()..sort();
+        final isLikedByMe = likedSet.contains(myUid);
+        final m = likedUids.length;
+        final total = m == 0 ? 0 : (m > maxSlices ? maxSlices : m);
+        final colors = likedUids.map(colorForUid).take(total).toList();
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: const [
+              BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 2)),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 하트: 탭=토글, 롱프레스=좋아요한 사람 팝업
+              GestureDetector(
+                onTap: () async {
+                  try {
+                    await svc.toggleLikeEdited(
+                      albumId: albumId,
+                      editedId: editedId,
+                      uid: myUid,
+                      like: !isLikedByMe,
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('좋아요 실패: $e')),
+                    );
+                  }
+                },
+                onLongPress: () => onShowLikers(likedUids),
+                child: CustomPaint(
+                  size: const Size.square(22),
+                  painter: _HeartPainter(
+                    totalSlots: total,
+                    filledColors: colors,
+                    outlineColor: isLikedByMe
+                        ? const Color(0xFF625F8C)
+                        : Colors.grey.shade400,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              // 숫자: 탭=팝업
+              GestureDetector(
+                onTap: () => onShowLikers(likedUids),
+                child: Container(
+                  width: 22,
+                  height: 22,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE6E6EB),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Text(
+                    '$m',
+                    style: const TextStyle(
+                      color: Color(0xFF4C4A64),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
