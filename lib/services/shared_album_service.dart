@@ -383,6 +383,44 @@ class SharedAlbumService {
     );
   }
 
+  // 편집본 likedBy 스트림
+Stream<Set<String>> watchEditedLikedBy({
+  required String albumId,
+  required String editedId,
+}) {
+  final ref = _fs
+      .collection('albums')
+      .doc(albumId)
+      .collection('edited')
+      .doc(editedId);
+
+  return ref.snapshots().map((ds) {
+    final liked = (ds.data()?['likedBy'] as List?)?.cast<String>() ?? const <String>[];
+    return liked.toSet();
+  });
+}
+
+// 편집본 좋아요 토글
+Future<void> toggleLikeEdited({
+  required String albumId,
+  required String editedId,
+  required String uid,
+  required bool like,
+}) async {
+  final ref = _fs
+      .collection('albums')
+      .doc(albumId)
+      .collection('edited')
+      .doc(editedId);
+
+  await ref.set({
+    'likedBy': like
+        ? FieldValue.arrayUnion([uid])
+        : FieldValue.arrayRemove([uid]),
+  }, SetOptions(merge: true));
+}
+
+
   Future<String> createAlbum({
     required String uid,
     required String title,
@@ -585,7 +623,7 @@ class SharedAlbumService {
     );
   }
 
-  Future<void> toggleLike({
+  /*Future<void> toggleLike({
     required String uid,
     required String albumId,
     required String photoId,
@@ -598,6 +636,61 @@ class SharedAlbumService {
           : FieldValue.arrayRemove([uid]),
     });
   }
+  */
+
+  Future<void> toggleLike({
+  required String uid,
+  required String albumId,
+  required String photoId, // 원본이면 photoId, 편집본이면 editedId
+  required bool like,
+  bool isEdited = false,   // true면 편집본, false면 원본
+}) async {
+  final albumRef = _albumDoc(albumId);
+
+  // ✅ 편집본 경로를 albums/{albumId}/edited 로 고정
+  final ref = isEdited
+      ? albumRef.collection('edited').doc(photoId)
+      : albumRef.collection('photos').doc(photoId);
+
+  await _fs.runTransaction((tx) async {
+    final snap = await tx.get(ref);
+    final data = snap.data() ?? {};
+    final likedBy = List<String>.from(data['likedBy'] ?? []);
+
+    if (like) {
+      if (!likedBy.contains(uid)) likedBy.add(uid);
+    } else {
+      likedBy.remove(uid);
+    }
+
+    tx.set(ref, {'likedBy': likedBy}, SetOptions(merge: true));
+  });
+}
+
+
+
+  // ===== 편집된 사진 좋아요 =====
+  // 컬렉션 이름은 사용 중인 스키마에 맞게 수정(예: editedPhotos / edits / edited_images)
+  /* Future<void> toggleLikeOnEditedPhoto({
+  required String uid,
+  required String albumId, // ✅ 앨범 하위로 이동하므로 필요
+  required String editedId,
+  required bool like,
+}) async {
+  final ref = _albumDoc(albumId)
+      .collection('edited')
+      .doc(editedId);
+
+  await ref.update({
+    'likedBy': like
+        ? FieldValue.arrayUnion([uid])
+        : FieldValue.arrayRemove([uid]),
+  });
+}
+*/
+
+
+
 
   // ===== 내부: edited 잠금/해제 (선택적) =====
   Future<void> _lockEdited({
