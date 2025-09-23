@@ -582,30 +582,30 @@ class _EditViewScreenState extends State<EditViewScreen> {
         }
 
       // ===== 얼굴 보정 실시간 수신 =====
+      // lib/screens/edit_view_screen.dart 내 _applyIncomingOp(...) 안의
+      // case 'beauty': 블록 교체
+
       case 'beauty':
         {
           // 1) 파라미터 파싱
           final faceIdx = (data['face'] as num?)?.toInt();
           final paramsMap = (data['params'] as Map?)?.cast<String, dynamic>();
-          final prevMap = (data['prev'] as Map?)?.cast<String, dynamic>();
+          // final prevMap = (data['prev'] as Map?)?.cast<String, dynamic>(); // 누적렌더에는 불필요
+
           if (faceIdx == null || paramsMap == null) break;
 
           final newParams = beautyParamsFromMap(paramsMap);
-          // ✅ prev 우선: 패널 오픈 당시 상대 기준(Δ 기준점)
-          final prevParams = prevMap != null
-              ? beautyParamsFromMap(prevMap)
-              : (_faceParams[faceIdx] ?? BeautyParams());
 
           // 2) 랜드마크 보장
           if (_faces468.isEmpty) {
             await _runFaceDetect();
-            if (_faces468.isEmpty) break; // 여전히 없으면 안전 종료
+            if (_faces468.isEmpty) break;
           }
 
-          // 3) 결정적 베이스 PNG 생성(원본→회전→반전→크롭→PNG)
+          // 3) 베이스 PNG(원본→회전→반전→크롭)
           final basePng = await _renderBaseForBeauty();
 
-          // 4) 원본 픽셀 사이즈
+          // 4) 이미지 사이즈
           final imInfo = img.decodeImage(basePng);
           if (imInfo == null) break;
           final Size imgSize = Size(
@@ -613,38 +613,22 @@ class _EditViewScreenState extends State<EditViewScreen> {
             imInfo.height.toDouble(),
           );
 
-          // 5) 컨트롤러로 Δ만 적용(누적 보정 방지)
+          // 5) 소스 오브 트루스 업데이트
+          _faceParams[faceIdx] = newParams;
+
+          // 6) ★ 누적 재렌더
           final ctrl = BeautyController();
-          final outBytes = await ctrl.applyAll(
+          final outBytes = await ctrl.applyCumulative(
             srcPng: basePng,
             faces468: _faces468,
-            selectedFace: faceIdx,
             imageSize: imgSize,
-            params: newParams,
-            prevParams: prevParams, // ← Δ 적용 핵심
+            paramsByFace: _faceParams,
           );
 
-          // 6) 결과/상태 반영
+          // 7) 반영
           setState(() {
             _editedBytes = outBytes;
-            _faceParams[faceIdx] = newParams; // 소스 오브 트루스 갱신
             _dirty = true;
-          });
-          break;
-        }
-      // [추가] 채도 수신
-      case 'saturation':
-        {
-          final v = (data['value'] as num?)?.toDouble() ?? 0.0;
-          // 결정적 베이스 재구성(원본→회전→반전→크롭)
-          final base = await _renderBaseForBrightness(); // [추가]**
-          final out = (v.abs() < 1e-6)
-              ? base
-              : ImageOps.adjustSaturation(base, v);
-          setState(() {
-            _adjustBaseBytes = base; // [추가] 이후 조정에도 동일 베이스 재사용**
-            _editedBytes = out;
-            _saturation = v;
           });
           break;
         }
@@ -1877,17 +1861,17 @@ class _EditViewScreenState extends State<EditViewScreen> {
     // 1) 결정적 베이스 PNG 확보(원본→회전→반전→크롭)
     _beautyBasePng = await _renderBaseForBeauty();
 
-    // 2) 실제 이미지 픽셀 크기 계산
+    // 2) 실제 이미지 픽셀 크기
     final imInfo = img.decodeImage(_beautyBasePng!)!;
     final Size imgSize = Size(
       imInfo.width.toDouble(),
       imInfo.height.toDouble(),
     );
 
-    // 3) 얼굴별 저장된 파라미터 초기값
+    // 3) 선택 얼굴 초기값
     final init = _faceParams[_selectedFace!] ?? BeautyParams();
 
-    // 4) 모달 1회 호출 (원본 해상도 + 실제 이미지 크기)
+    // 4) 패널 오픈
     final result =
         await showModalBottomSheet<({Uint8List image, BeautyParams params})>(
           context: context,
@@ -1897,7 +1881,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
             borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
           ),
           builder: (_) => BeautyPanel(
-            srcPng: _beautyBasePng!,
+            srcPng: _beautyBasePng!, // 패널 미리보기용
             faces468: _faces468,
             selectedFace: _selectedFace!,
             imageSize: imgSize,
@@ -1905,19 +1889,32 @@ class _EditViewScreenState extends State<EditViewScreen> {
           ),
         );
 
-    // 5) 반영 + 브로드캐스트
     if (result != null && mounted) {
+      // Undo 스냅샷
       final prev = await _currentBytes();
       final paramsCopy = _cloneParams(_faceParams);
 
+      // 5) 소스 오브 트루스 업데이트 (선택 얼굴 파라미터 저장)
+      _faceParams[_selectedFace!] = result.params;
+
+      // 6) ★ 누적 재렌더: basePNG에서 모든 얼굴 파라미터로 다시 생성
+      final ctrl = BeautyController();
+      final cumulative = await ctrl.applyCumulative(
+        srcPng: _beautyBasePng!,
+        faces468: _faces468,
+        imageSize: imgSize,
+        paramsByFace: _faceParams,
+      );
+
+      // 7) 반영
       setState(() {
-        _editedBytes = result.image;
+        _editedBytes = cumulative;
         _beautyParams = result.params;
         _dirty = true;
         _faceUndo.add((image: Uint8List.fromList(prev), params: paramsCopy));
-        _faceParams[_selectedFace!] = result.params;
       });
 
+      // 8) 브로드캐스트(상대 Δ 전달은 그대로 유지 — 수신 쪽도 누적 재렌더로 맞춰줄 것)
       await _sendOp('beauty', {
         'face': _selectedFace,
         'params': result.params.toMap(),

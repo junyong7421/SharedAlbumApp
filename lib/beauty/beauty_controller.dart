@@ -42,6 +42,7 @@ class BeautyParams {
 }
 
 class BeautyController {
+  /// (기존) 단일 얼굴 Δ 적용
   Future<Uint8List> applyAll({
     required Uint8List srcPng,
     required List<List<Offset>> faces468,
@@ -53,6 +54,46 @@ class BeautyController {
     final job = _Job(srcPng, faces468, selectedFace, imageSize, params);
     // ❗ 반드시 prev 전달: 누적 보정 방지(Δ만 적용)
     return _apply(job, prev: prevParams);
+  }
+
+  /// ★ (신규) 여러 명을 한 번에 누적 적용
+  /// - 항상 base PNG(`srcPng`)에서 시작해 `paramsByFace`의 **절대값**을
+  ///   얼굴 인덱스 오름차순으로 차례대로 누적 반영.
+  Future<Uint8List> applyCumulative({
+    required Uint8List srcPng,
+    required List<List<Offset>> faces468,
+    required Size imageSize,
+    required Map<int, BeautyParams> paramsByFace,
+  }) async {
+    Uint8List cur = srcPng;
+
+    // 안정적/일관된 순서를 위해 인덱스 정렬
+    final keys = paramsByFace.keys.toList()..sort();
+
+    for (final idx in keys) {
+      // 감시: 범위를 벗어나는 얼굴 인덱스는 스킵
+      if (idx < 0 || idx >= faces468.length) continue;
+
+      final p = paramsByFace[idx];
+      if (p == null) continue;
+      if (_isZeroParams(p)) continue; // 완전 0이면 스킵(속도 ↑)
+
+      // prev=0(기준값)으로 두고 '절대값'을 누적 적용
+      final job = _Job(cur, faces468, idx, imageSize, p);
+      cur = await _apply(job, prev: BeautyParams());
+    }
+    return cur;
+  }
+
+  // 파라미터가 모두 0인지 판정
+  bool _isZeroParams(BeautyParams p) {
+    const eps = 1e-6;
+    return p.skinTone.abs() <= eps &&
+        p.eyeTail.abs() <= eps &&
+        p.noseAmount.abs() <= eps &&
+        p.hueShift.abs() <= eps &&
+        p.lipSatGain.abs() <= eps &&
+        p.lipIntensity.abs() <= eps;
   }
 }
 
