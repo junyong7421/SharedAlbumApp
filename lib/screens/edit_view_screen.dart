@@ -1387,8 +1387,24 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   // 조정툴 진입 시 베이스 스냅샷
                   if (i == 2 || i == 4 || i == 5) {
                     _adjustBaseBytes = await _renderBaseForBrightness();
-                    if (i == 4) _saturation = 0.0;
-                    if (i == 5) _sharp = 0.0;
+                    //if (i == 4) _saturation = 0.0;
+                    //if (i == 5) _sharp = 0.0;
+                    // 🔹 툴 재진입시 현재 값으로 프리뷰 즉시 갱신
+                    if (i == 4) {
+                      final base = _adjustBaseBytes!;
+                      setState(() {
+                        _editedBytes = (_saturation.abs() < 1e-6)
+                            ? base
+                            : ImageOps.adjustSaturation(base, _saturation);
+                      });
+                    } else if (i == 5) {
+                      final base = _adjustBaseBytes!;
+                      setState(() {
+                        _editedBytes = (_sharp.abs() < 1e-6)
+                            ? base
+                            : ImageOps.sharpen(base, _sharp);
+                      });
+                    }
                   }
                   setState(() {
                     _isFaceEditMode = false;
