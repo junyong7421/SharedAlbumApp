@@ -632,6 +632,36 @@ class _EditViewScreenState extends State<EditViewScreen> {
           });
           break;
         }
+      // [추가] 채도 수신
+      case 'saturation':
+        {
+          final v = (data['value'] as num?)?.toDouble() ?? 0.0;
+          // 결정적 베이스 재구성(원본→회전→반전→크롭)
+          final base = await _renderBaseForBrightness(); // [추가]**
+          final out = (v.abs() < 1e-6)
+              ? base
+              : ImageOps.adjustSaturation(base, v);
+          setState(() {
+            _adjustBaseBytes = base; // [추가] 이후 조정에도 동일 베이스 재사용**
+            _editedBytes = out;
+            _saturation = v;
+          });
+          break;
+        }
+
+      // [추가] 선명도 수신
+      case 'sharpen':
+        {
+          final v = (data['value'] as num?)?.toDouble() ?? 0.0;
+          final base = await _renderBaseForBrightness(); // [추가]**
+          final out = (v.abs() < 1e-6) ? base : ImageOps.sharpen(base, v);
+          setState(() {
+            _adjustBaseBytes = base; // [추가]**
+            _editedBytes = out;
+            _sharp = v;
+          });
+          break;
+        }
     }
     _dirty = true;
   }
@@ -1356,8 +1386,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
                   // 조정툴 진입 시 베이스 스냅샷
                   if (i == 2 || i == 4 || i == 5) {
-                    _adjustBaseBytes = await _currentBytes();
-                    //if (i == 2) _brightness = 0.0;
+                    _adjustBaseBytes = await _renderBaseForBrightness();
                     if (i == 4) _saturation = 0.0;
                     if (i == 5) _sharp = 0.0;
                   }
@@ -1568,13 +1597,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _saturationApplying = true;
     setState(() {});
     try {
-      final base = _adjustBaseBytes ?? await _currentBytes();
+      final base = _adjustBaseBytes ?? await _renderBaseForBrightness();
       if (_saturation.abs() < 1e-6) {
         setState(() => _editedBytes = base);
       } else {
         final out = ImageOps.adjustSaturation(base, _saturation);
         setState(() => _editedBytes = out);
       }
+      await _sendOp('saturation', {'value': _saturation});
+      _dirty = true;
     } finally {
       _saturationApplying = false;
       setState(() {});
@@ -1587,13 +1618,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _sharpenApplying = true;
     setState(() {});
     try {
-      final base = _adjustBaseBytes ?? await _currentBytes();
+      final base = _adjustBaseBytes ?? await _renderBaseForBrightness();
       if (_sharp.abs() < 1e-6) {
         setState(() => _editedBytes = base);
       } else {
         final out = ImageOps.sharpen(base, _sharp);
         setState(() => _editedBytes = out);
       }
+      await _sendOp('sharpen', {'value': _sharp});
+      _dirty = true;
     } finally {
       _sharpenApplying = false;
       setState(() {});
