@@ -675,12 +675,14 @@ class _EditScreenState extends State<EditScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
+      bottomNavigationBar: const CustomBottomNavBar(selectedIndex: 2), 
       body: SafeArea(
         child: Stack(
           children: [
             // 자동 갱신
             ListView(
-              padding: EdgeInsets.zero,
+        
+              padding: const EdgeInsets.only(bottom: 120), // 바텀바 높이+여유만큼
               children: [
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1296,20 +1298,14 @@ class _EditScreenState extends State<EditScreen> {
                       },
                     ),
 
-                    const SizedBox(height: 110), // 바텀바 침범 방지
+                    
                   ],
                 ),
               ],
             ),
 
 
-            // 하단 네비게이션 바
-            Positioned(
-              bottom: 20,
-              left: 20,
-              right: 20,
-              child: const CustomBottomNavBar(selectedIndex: 2),
-            ),
+            
           ],
         ),
       ),
