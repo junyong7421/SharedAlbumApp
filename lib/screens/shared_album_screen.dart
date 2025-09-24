@@ -607,91 +607,79 @@ Widget _buildMainAlbumList() {
 
                     // ============== 썸네일(콜라주) 영역 ==============
                     SizedBox(
-                      height: 180,
-                      child: StreamBuilder<List<Photo>>(
-                        key: ValueKey('album-${album.id}-thumbs'),
-                        stream: _svc.watchPhotos(uid: _uid, albumId: album.id),
-                        builder: (context, psnap) {
-                          if (psnap.hasError) {
-                            return const Center(
-                              child: Text(
-                                '썸네일 로드 실패',
-                                style: TextStyle(color: Color(0xFF625F8C)),
-                              ),
-                            );
-                          }
-                          if (psnap.connectionState == ConnectionState.waiting) {
-                            return const Center(
-                              child: CircularProgressIndicator(
-                                color: Color(0xFF625F8C),
-                              ),
-                            );
-                          }
+  height: 180,
+  child: StreamBuilder<List<Photo>>(
+    key: ValueKey('album-${album.id}-thumbs'),
+    stream: _svc.watchPhotos(uid: _uid, albumId: album.id),
+    builder: (context, psnap) {
+      if (psnap.hasError) {
+        return const Center(
+          child: Text('썸네일 로드 실패', style: TextStyle(color: Color(0xFF625F8C))),
+        );
+      }
+      if (psnap.connectionState == ConnectionState.waiting) {
+        return const Center(
+          child: CircularProgressIndicator(color: Color(0xFF625F8C)),
+        );
+      }
 
-                          final photos = (psnap.data ?? []);
-                          if (photos.isEmpty) {
-                            // 사진 없으면 coverPhotoUrl 있으면 한 장, 없으면 문구
-                            final cover = album.coverPhotoUrl;
-                            if (cover != null && cover.isNotEmpty) {
-                              return ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
-                                child: Image.network(
-                                  cover,
-                                  width: double.infinity,
-                                  height: 180,
-                                  fit: BoxFit.cover,
-                                ),
-                              );
-                            }
-                            return const Center(
-                              child: Text(
-                                '사진이 없습니다',
-                                style: TextStyle(color: Color(0xFF625F8C)),
-                              ),
-                            );
-                          }
+      final photos = (psnap.data ?? []);
+      if (photos.isEmpty) {
+        final cover = album.coverPhotoUrl;
+        if (cover != null && cover.isNotEmpty) {
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Image.network(
+              cover,
+              width: double.infinity,
+              height: 180,
+              fit: BoxFit.cover,
+            ),
+          );
+        }
+        return const Center(
+          child: Text('사진이 없습니다', style: TextStyle(color: Color(0xFF625F8C))),
+        );
+      }
 
-                          // 최근 4장까지만 사용
-                          final list = photos.take(4).toList();
+      // 최근 4장까지만 미리 슬라이스
+      final list = photos.take(4).toList();
 
-                          // 1장일 땐 크게 한 장
-                          if (list.length == 1) {
-                            final url = list.first.url;
-                            if (url.isEmpty) {
-                              return const Center(
-                                child: Text(
-                                  '이미지 URL 없음',
-                                  style:
-                                      TextStyle(color: Color(0xFF625F8C)),
-                                ),
-                              );
-                            }
-                            return ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: Image.network(
-                                url,
-                                width: double.infinity,
-                                height: 180,
-                                fit: BoxFit.cover,
-                              ),
-                            );
-                          }
+      // 1장: 단일 큰 이미지
+      if (list.length == 1) {
+        final url = list[0].url;
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.network(url, width: double.infinity, height: 180, fit: BoxFit.cover),
+        );
+      }
 
-                          // 2~4장일 땐 2x2 콜라주
-                          // 2~4장일 땐 2x2 콜라주 (항상 4등분 고정)
-final urls4 = List<String>.generate(
-  4,
-  (i) => i < list.length ? list[i].url : '',
-);
+      // 2장: 좌/우 2×1
+      if (list.length == 2) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: _collage2x1(list[0].url, list[1].url),
+        );
+      }
 
-return ClipRRect(
-  borderRadius: BorderRadius.circular(12),
-  child: _fixedCollage2x2(urls4),
-);
+      // 3장: 왼쪽(세로 한 장), 오른쪽(위/아래 두 장)
+      if (list.length == 3) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: _collage3L1R2([list[0].url, list[1].url, list[2].url]),
+        );
+      }
 
-                        },
-                      ),
-                    ),
+      // 4장 이상: 정사각 2×2 상단좌→상단우→하단좌→하단우
+      final urls4 = [list[0].url, list[1].url, list[2].url, list[3].url];
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: _fixedCollage2x2(urls4),
+      );
+    },
+  ),
+),
+
                     // ===============================================
                   ],
                 ),
@@ -1121,30 +1109,48 @@ return ClipRRect(
     );
   }
 
-// 2x2 고정 콜라주(항상 동일한 크기 4칸)
-Widget _fixedCollage2x2(List<String> urls) {
-  const gap = 2.0; // 칸 사이 간격
+// 각 타일: 이미지 없으면 플레이스홀더
+Widget _collageTile(String url) {
+  if (url.isEmpty) return const ColoredBox(color: Color(0xFFE6EBFE));
+  return Image.network(url, fit: BoxFit.cover, width: double.infinity, height: double.infinity);
+}
+
+// 2장: 좌우 2×1
+Widget _collage2x1(String leftUrl, String rightUrl) {
+  const gap = 2.0;
   return SizedBox(
-    width: double.infinity,
-    height: 180, // 부모 SizedBox 높이에 맞춰 동일 비율 유지
+    width: double.infinity, height: 180,
     child: Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: Column(
-            children: [
-              Expanded(child: _collageTile(urls[0])),
-              const SizedBox(height: gap),
-              Expanded(child: _collageTile(urls[2])),
-            ],
-          ),
-        ),
+        Expanded(child: _collageTile(leftUrl)),
+        const SizedBox(width: gap),
+        Expanded(child: _collageTile(rightUrl)),
+      ],
+    ),
+  );
+}
+
+// 3장: 왼쪽 한 장(세로로 크게) + 오른쪽 위/아래 두 장
+Widget _collage3L1R2(List<String> urls) {
+  // urls[0]: 왼쪽 큰 칸, urls[1], urls[2]: 오른쪽 위/아래
+  const gap = 2.0;
+  final u0 = urls.length > 0 ? urls[0] : '';
+  final u1 = urls.length > 1 ? urls[1] : '';
+  final u2 = urls.length > 2 ? urls[2] : '';
+  return SizedBox(
+    width: double.infinity, height: 180,
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(child: _collageTile(u0)),
         const SizedBox(width: gap),
         Expanded(
           child: Column(
             children: [
-              Expanded(child: _collageTile(urls[1])),
+              Expanded(child: _collageTile(u1)),
               const SizedBox(height: gap),
-              Expanded(child: _collageTile(urls[3])),
+              Expanded(child: _collageTile(u2)),
             ],
           ),
         ),
@@ -1153,18 +1159,42 @@ Widget _fixedCollage2x2(List<String> urls) {
   );
 }
 
-// 각 칸: 이미지가 없으면 플레이스홀더로 채움
-Widget _collageTile(String url) {
-  if (url.isEmpty) {
-    return const ColoredBox(color: Color(0xFFE6EBFE)); // 빈 칸 색상
-  }
-  return Image.network(
-    url,
-    fit: BoxFit.cover,           // 칸을 꽉 채우되 중심으로 크롭
-    width: double.infinity,
-    height: double.infinity,
+// 4장: 2×2 고정
+Widget _fixedCollage2x2(List<String> urls) {
+  const gap = 2.0;
+  final u0 = urls.length > 0 ? urls[0] : '';
+  final u1 = urls.length > 1 ? urls[1] : '';
+  final u2 = urls.length > 2 ? urls[2] : '';
+  final u3 = urls.length > 3 ? urls[3] : '';
+  return SizedBox(
+    width: double.infinity, height: 180,
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          child: Column(
+            children: [
+              Expanded(child: _collageTile(u0)),
+              const SizedBox(height: gap),
+              Expanded(child: _collageTile(u2)),
+            ],
+          ),
+        ),
+        const SizedBox(width: gap),
+        Expanded(
+          child: Column(
+            children: [
+              Expanded(child: _collageTile(u1)),
+              const SizedBox(height: gap),
+              Expanded(child: _collageTile(u3)),
+            ],
+          ),
+        ),
+      ],
+    ),
   );
 }
+
 
 
 
