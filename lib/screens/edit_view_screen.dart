@@ -288,21 +288,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return _editedBytes ?? _originalBytes!;
   }
 
-  Uint8List _composeAdjustments(Uint8List base) {
-    Uint8List out = base;
-
-    if (_latestBrightnessValue.abs() > 1e-6) {
-      out = ImageOps.adjustBrightness(out, _latestBrightnessValue);
-    }
-    if (_saturation.abs() > 1e-6) {
-      out = ImageOps.adjustSaturation(out, _saturation);
-    }
-    if (_sharp.abs() > 1e-6) {
-      out = ImageOps.sharpen(out, _sharp);
-    }
-    return out;
-  }
-
   // === 정규화 크롭 유틸 (이미지 좌표계 기준)
   Future<Uint8List> _cropNormalizedBytes(Uint8List src, Rect norm) async {
     final codec = await ui.instantiateImageCodec(src);
@@ -352,6 +337,58 @@ class _EditViewScreenState extends State<EditViewScreen> {
     final im = img.decodeImage(base);
     if (im == null) throw StateError('이미지를 디코드할 수 없습니다.');
     return Uint8List.fromList(img.encodePng(im));
+  }
+
+  // 지오메트리(원본→회전→반전→크롭)만 적용된 PNG
+  Future<Uint8List> _renderGeometryBasePng() => _renderBaseForBeauty();
+
+  // 현재 지오메트리에서 랜드마크가 없으면 재검출을 보장
+  Future<void> _ensureFacesOnCurrentGeometry() async {
+    if (_faces468.isEmpty) {
+      await _rerunFaceDetectOnCurrentGeometry();
+    }
+  }
+
+  // 지오메트리 + (있다면) 얼굴보정까지 반영한 PNG 반환
+  Future<Uint8List> _renderBeautyBasePng() async {
+    final geoPng = await _renderGeometryBasePng();
+    if (_faceParams.isEmpty) return geoPng;
+
+    await _ensureFacesOnCurrentGeometry();
+    final imInfo = img.decodeImage(geoPng)!;
+    final Size imgSize = Size(
+      imInfo.width.toDouble(),
+      imInfo.height.toDouble(),
+    );
+
+    final ctrl = BeautyController();
+    return await ctrl.applyCumulative(
+      srcPng: geoPng,
+      faces468: _faces468,
+      imageSize: imgSize,
+      paramsByFace: _faceParams,
+    );
+  }
+
+  // 글로벌 조정만 합성 (입력은 PNG 권장: beautyBase)
+  Uint8List _applyGlobalAdjustments(Uint8List basePng) {
+    Uint8List out = basePng;
+    if (_latestBrightnessValue.abs() > 1e-6) {
+      out = ImageOps.adjustBrightness(out, _latestBrightnessValue);
+    }
+    if (_saturation.abs() > 1e-6) {
+      out = ImageOps.adjustSaturation(out, _saturation);
+    }
+    if (_sharp.abs() > 1e-6) {
+      out = ImageOps.sharpen(out, _sharp);
+    }
+    return out;
+  }
+
+  // 지오메트리 → (얼굴보정) → 글로벌 조정 전체 파이프라인
+  Future<Uint8List> _renderFullPipelinePng() async {
+    final beautyBase = await _renderBeautyBasePng();
+    return _applyGlobalAdjustments(beautyBase);
   }
 
   // ===== PNG 캡처/업로드 =====
@@ -531,9 +568,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
           _latestBrightnessValue = v;
           _brightness = v;
 
-          final base = await _renderBaseForBrightness();
+          final base = await _renderBeautyBasePng(); // ★ 변경
           _brightnessBaseBytes = Uint8List.fromList(base);
-          final composed = _composeAdjustments(base);
+          _adjustBaseBytes = base; // ★ 앵커 일치
+          final composed = _applyGlobalAdjustments(base); // ★ 변경
 
           setState(() => _editedBytes = composed);
           break;
@@ -588,6 +626,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
           } else {
             _flipHState = !_flipHState;
           }
+          await _rerunFaceDetectOnCurrentGeometry();
           await _reapplyAdjustmentsIfActive();
           break;
         }
@@ -609,7 +648,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
           // 2) 랜드마크 보장
           if (_faces468.isEmpty) {
-            await _runFaceDetect();
+            await _rerunFaceDetectOnCurrentGeometry(); // ★ 지오메트리 기준
             if (_faces468.isEmpty) break;
           }
 
@@ -641,17 +680,25 @@ class _EditViewScreenState extends State<EditViewScreen> {
             _editedBytes = outBytes;
             _dirty = true;
           });
+          // 얼굴보정 결과(outBytes)는 "얼굴보정까지 반영된 베이스"로 간주
+          _adjustBaseBytes = outBytes;
+          _brightnessBaseBytes = Uint8List.fromList(outBytes);
+
+          // 이미 글로벌 조정 값이 있다면 다시 합성해서 화면에 반영
+          final composedAfterBeauty = _applyGlobalAdjustments(outBytes);
+          setState(() {
+            _editedBytes = composedAfterBeauty;
+          });
           break;
         }
-
       case 'sharpen':
         {
           final v = (data['value'] as num?)?.toDouble() ?? 0.0;
           _sharp = v;
 
-          final base = await _renderBaseForBrightness();
+          final base = await _renderBeautyBasePng(); // ★ 변경
           _adjustBaseBytes = base;
-          final composed = _composeAdjustments(base);
+          final composed = _applyGlobalAdjustments(base); // ★ 변경
 
           setState(() {
             _editedBytes = composed;
@@ -664,9 +711,9 @@ class _EditViewScreenState extends State<EditViewScreen> {
           final v = (data['value'] as num?)?.toDouble() ?? 0.0;
           _saturation = v;
 
-          final base = await _renderBaseForBrightness();
+          final base = await _renderBeautyBasePng(); // ★ 변경
           _adjustBaseBytes = base;
-          final composed = _composeAdjustments(base);
+          final composed = _applyGlobalAdjustments(base); // ★ 변경
 
           setState(() {
             _editedBytes = composed;
@@ -679,12 +726,51 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _reapplyAdjustmentsIfActive() async {
-    // 굳이 툴 선택 여부로 제한하지 말고 항상 합성해도 OK
-    final base = await _renderBaseForBrightness();
-    _brightnessBaseBytes = Uint8List.fromList(base);
+    // 얼굴보정 파라미터가 있으면 지오메트리 변경 후 항상 재검출
+    if (_faceParams.isNotEmpty) {
+      await _rerunFaceDetectOnCurrentGeometry();
+    }
+    final composed = await _renderFullPipelinePng();
     setState(() {
-      _editedBytes = _composeAdjustments(base);
+      _editedBytes = composed;
     });
+  }
+
+  Size? _geoImgSize; // 상태 추가
+  // 지오메트리(회전/반전/크롭) 이후 베이스PNG 기준으로 다시 얼굴 인식
+  Future<void> _rerunFaceDetectOnCurrentGeometry() async {
+    try {
+      await _ensureFaceModelLoaded();
+      final basePng = await _renderBaseForBeauty(); // 원본→회전→반전→크롭 적용된 PNG
+      final im = img.decodeImage(basePng)!;
+      _geoImgSize = Size(im.width.toDouble(), im.height.toDouble());
+      final faces = await FaceLandmarker.detect(basePng);
+
+      // 정규화 바운딩 박스 갱신
+      final rects = faces.map((pts) {
+        double minX = 1, minY = 1, maxX = 0, maxY = 0;
+        for (final p in pts) {
+          if (p.dx < minX) minX = p.dx;
+          if (p.dy < minY) minY = p.dy;
+          if (p.dx > maxX) maxX = p.dx;
+          if (p.dy > maxY) maxY = p.dy;
+        }
+        return Rect.fromLTRB(minX, minY, maxX, maxY); // 0~1
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _faces468 = faces;
+        _faceRects = rects;
+        // 선택된 얼굴이 이전 인덱스와 맞지 않을 수 있으니 필요시 해제
+        if (_selectedFace != null && _selectedFace! >= _faceRects.length) {
+          _selectedFace = null;
+        }
+      });
+    } catch (e) {
+      // 필요시 로깅
+      debugPrint('Face re-detect failed: $e');
+    }
   }
 
   // ===== 백필 + 실시간 구독 =====
@@ -839,6 +925,14 @@ class _EditViewScreenState extends State<EditViewScreen> {
         }
       }
     }
+  }
+
+  Rect _contentRectForCover(Size imageSize, Size paintSize) {
+    final fitted = applyBoxFit(BoxFit.cover, imageSize, paintSize);
+    final renderSize = fitted.destination; // 최종 그려질 크기
+    final dx = (paintSize.width - renderSize.width) / 2;
+    final dy = (paintSize.height - renderSize.height) / 2;
+    return Rect.fromLTWH(dx, dy, renderSize.width, renderSize.height);
   }
 
   // ======== 루트 키 계산 ========
@@ -1285,6 +1379,15 @@ class _EditViewScreenState extends State<EditViewScreen> {
                       paintSize: paintSize,
                       showLm: _showLm,
                       dimOthers: _dimOthers,
+                      // ✅ _geoImgSize가 없으면 전체 영역을 쓰도록 fallback
+                      imageContentRect: (_geoImgSize == null)
+                          ? Rect.fromLTWH(
+                              0,
+                              0,
+                              paintSize.width,
+                              paintSize.height,
+                            )
+                          : _contentRectForCover(_geoImgSize!, paintSize),
                     ),
                   ),
                 ),
@@ -1295,15 +1398,18 @@ class _EditViewScreenState extends State<EditViewScreen> {
     );
   }
 
-  int? _hitTestFace(Offset pos, Size size) {
+  int? _hitTestFace(Offset pos, Size stageSize) {
+    if (_faceRects.isEmpty || _geoImgSize == null) return null;
+
+    final content = _contentRectForCover(_geoImgSize!, stageSize);
     for (int i = 0; i < _faceRects.length; i++) {
       final r = _faceRects[i];
       final rectPx = Rect.fromLTRB(
-        r.left * size.width,
-        r.top * size.height,
-        r.right * size.width,
-        r.bottom * size.height,
-      ).inflate(12); // 터치 여유
+        content.left + r.left * content.width,
+        content.top + r.top * content.height,
+        content.left + r.right * content.width,
+        content.top + r.bottom * content.height,
+      ).inflate(12);
       if (rectPx.contains(pos)) return i;
     }
     return null;
@@ -1380,32 +1486,35 @@ class _EditViewScreenState extends State<EditViewScreen> {
                   _rxBrightnessSession = false;
                 }
                 if (i == 1) {
-                  setState(() => _isFaceEditMode = true);
+                  setState(() {
+                    _isFaceEditMode = true;
+                    _selectedTool = 1; // ← 아이콘 상태도 동기화(선택)
+                  });
+                  await _ensureFaceModelLoaded();
                   if (_faces468.isEmpty) {
                     _smokeTestLoadTask();
-                    _runFaceDetect();
+                    await _rerunFaceDetectOnCurrentGeometry();
                   }
                 } else {
-                  if (i == 2) {
-                    // 밝기 모드 진입 시 결정적 앵커 생성 (화면은 그대로)
-                    final base = await _renderBaseForBrightness();
-                    _brightnessBaseBytes = Uint8List.fromList(base);
-                    _rxBrightnessSession = false;
-                    setState(() {
-                      _brightness = _latestBrightnessValue;
-                    });
-                  }
                   // 얼굴보정 이탈 → 스택 비우기 (얼굴 보정 undo만 관리)
                   _faceUndo.clear();
 
-                  // 조정툴 진입 시 베이스 스냅샷
+                  // 조정툴 진입 시 베이스 스냅샷 (지오메트리 + 얼굴보정)
                   if (i == 2 || i == 4 || i == 5) {
-                    final base = await _renderBaseForBrightness();
-                    _adjustBaseBytes = base;
+                    final baseForAdjust =
+                        await _renderBeautyBasePng(); // ★ 얼굴보정 포함 베이스
+                    _adjustBaseBytes = baseForAdjust;
+                    _brightnessBaseBytes = Uint8List.fromList(
+                      baseForAdjust,
+                    ); // 밝기용 앵커도 동일
+                    final composed = _applyGlobalAdjustments(baseForAdjust);
                     setState(() {
-                      _editedBytes = _composeAdjustments(base);
+                      _editedBytes = composed;
+                      if (i == 2)
+                        _brightness = _latestBrightnessValue; // ★ 밝기 슬라이더 값 맞춤
                     });
                   }
+
                   setState(() {
                     _isFaceEditMode = false;
                     _selectedTool = i;
@@ -1617,8 +1726,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _saturationApplying = true;
     setState(() {});
     try {
-      final base = _adjustBaseBytes ?? await _renderBaseForBrightness();
-      final composed = _composeAdjustments(base); // 🔹 누적 합성
+      final base = _adjustBaseBytes ?? await _renderBeautyBasePng(); // ★
+      final composed = _applyGlobalAdjustments(base);
       setState(() => _editedBytes = composed);
 
       await _sendOp('saturation', {'value': _saturation});
@@ -1635,8 +1744,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
     _sharpenApplying = true;
     setState(() {});
     try {
-      final base = _adjustBaseBytes ?? await _renderBaseForBrightness();
-      final composed = _composeAdjustments(base); // 🔹 누적 합성
+      final base = _adjustBaseBytes ?? await _renderBeautyBasePng(); // ★
+      final composed = _applyGlobalAdjustments(base);
       setState(() => _editedBytes = composed);
 
       await _sendOp('sharpen', {'value': _sharp});
@@ -1661,31 +1770,56 @@ class _EditViewScreenState extends State<EditViewScreen> {
   Future<void> _applyCrop() async {
     _faceUndo.clear();
     if (_cropRectStage == null || _lastStageSize == null) return;
-    final s = _lastStageSize!;
-    final r = _cropRectStage!;
-    final norm = {
-      'l': r.left / s.width,
-      't': r.top / s.height,
-      'r': r.right / s.width,
-      'b': r.bottom / s.height,
-    };
 
+    final stageSize = _lastStageSize!;
+    final rStage = _cropRectStage!;
+
+    // 1) 현재 지오메트리 이미지 픽셀 사이즈 확보
+    //    (face detect를 이미 돌리셨으면 _geoImgSize가 채워져 있음)
+    if (_geoImgSize == null) {
+      // 안전하게 한 번 계산
+      final basePng = await _renderBaseForBeauty();
+      final im = img.decodeImage(basePng)!;
+      _geoImgSize = Size(im.width.toDouble(), im.height.toDouble());
+    }
+
+    // 2) BoxFit.cover로 그려진 실제 이미지 영역(rect) 계산
+    final content = _contentRectForCover(_geoImgSize!, stageSize);
+
+    // 3) stage-rect -> image-normalized(0~1)로 변환
+    Rect _stageToImageNorm(Rect r) {
+      final nx1 = ((r.left - content.left) / content.width).clamp(0.0, 1.0);
+      final ny1 = ((r.top - content.top) / content.height).clamp(0.0, 1.0);
+      final nx2 = ((r.right - content.left) / content.width).clamp(0.0, 1.0);
+      final ny2 = ((r.bottom - content.top) / content.height).clamp(0.0, 1.0);
+      return Rect.fromLTRB(nx1, ny1, nx2, ny2);
+    }
+
+    final normRect = _stageToImageNorm(rStage);
+
+    // 4) 로컬 미리보기 반영(지금처럼 stage 기반 crop 함수 사용 OK)
     final bytes = await _currentBytes();
     final out = ImageOps.cropFromStageRect(
       srcBytes: bytes,
-      stageCropRect: r,
-      stageSize: s,
+      stageCropRect: rStage,
+      stageSize: stageSize,
     );
     setState(() {
       _editedBytes = out;
       _cropRectStage = null;
       _dirty = true;
+      _cropNorm = normRect; // ✅ 파이프라인/재렌더용은 image-normalized로 보관
     });
 
-    _cropNorm = Rect.fromLTRB(norm['l']!, norm['t']!, norm['r']!, norm['b']!);
     await _reapplyAdjustmentsIfActive();
 
-    await _sendOp('crop', norm);
+    // 5) 브로드캐스트도 image-normalized 값으로 전송 (상대가 정확히 재현)
+    await _sendOp('crop', {
+      'l': normRect.left,
+      't': normRect.top,
+      'r': normRect.right,
+      'b': normRect.bottom,
+    });
   }
 
   Future<void> _applyBrightness() async {
@@ -1695,11 +1829,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
     setState(() {});
 
     try {
-      final base = await _renderBaseForBrightness();
+      final base = _adjustBaseBytes ?? await _renderBeautyBasePng();
       _brightnessBaseBytes = Uint8List.fromList(base);
 
       _latestBrightnessValue = _brightness; // 🔹 상태 먼저 갱신
-      final composed = _composeAdjustments(base); // 🔹 누적 합성
+      final composed = _applyGlobalAdjustments(base);
 
       setState(() {
         _editedBytes = composed;
@@ -1732,7 +1866,19 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _saturation = 0.0;
       _sharp = 0.0;
       _adjustBaseBytes = null;
+      _faceParams.clear();
+      _faces468 = [];
+      _faceRects = [];
+      _selectedFace = null;
+      _beautyBasePng = null;
     });
+  }
+
+  Future<void> _ensureFaceModelLoaded() async {
+    if (_modelLoaded) return;
+    final task = await rootBundle.load('assets/mediapipe/face_landmarker.task');
+    await FaceLandmarker.loadModel(task.buffer.asUint8List(), maxFaces: 5);
+    _modelLoaded = true;
   }
 
   Future<void> _applyRotate(int deg) async {
@@ -1744,6 +1890,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
+    await _rerunFaceDetectOnCurrentGeometry();
     await _reapplyAdjustmentsIfActive();
 
     await _sendOp('rotate', {'deg': deg});
@@ -1758,6 +1905,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _flipHState = !_flipHState;
+    await _rerunFaceDetectOnCurrentGeometry();
+    // ② 그 다음 재합성(얼굴보정 포함)
     await _reapplyAdjustmentsIfActive();
 
     await _sendOp('flip', {'dir': 'h'});
@@ -1772,6 +1921,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _flipVState = !_flipVState;
+    await _rerunFaceDetectOnCurrentGeometry();
     await _reapplyAdjustmentsIfActive();
 
     await _sendOp('flip', {'dir': 'v'});
@@ -1869,6 +2019,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
       return;
     }
 
+    await _rerunFaceDetectOnCurrentGeometry();
     // 1) 결정적 베이스 PNG 확보(원본→회전→반전→크롭)
     _beautyBasePng = await _renderBaseForBeauty();
 
@@ -1923,6 +2074,16 @@ class _EditViewScreenState extends State<EditViewScreen> {
         _beautyParams = result.params;
         _dirty = true;
         _faceUndo.add((image: Uint8List.fromList(prev), params: paramsCopy));
+      });
+
+      // 얼굴보정 결과(cumulative)를 베이스로 고정
+      _adjustBaseBytes = cumulative;
+      _brightnessBaseBytes = Uint8List.fromList(cumulative);
+
+      // 글로벌 조정이 0이 아니면 합성 재반영
+      final composedAfterBeauty = _applyGlobalAdjustments(cumulative);
+      setState(() {
+        _editedBytes = composedAfterBeauty;
       });
 
       // 8) 브로드캐스트(상대 Δ 전달은 그대로 유지 — 수신 쪽도 누적 재렌더로 맞춰줄 것)
@@ -2082,6 +2243,10 @@ class _LmOverlayPainter extends CustomPainter {
   final Size paintSize;
   final bool showLm;
   final bool dimOthers;
+
+  // ✅ 추가: BoxFit.cover로 실제 그려진 이미지 영역
+  final Rect imageContentRect;
+
   _LmOverlayPainter({
     required this.faces,
     required this.faceRects,
@@ -2089,10 +2254,13 @@ class _LmOverlayPainter extends CustomPainter {
     required this.paintSize,
     required this.showLm,
     required this.dimOthers,
+    required this.imageContentRect, // ✅
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    final content = imageContentRect; // ✅ 공통 기준
+
     if (showLm) {
       final dot = Paint()
         ..color = const Color(0xFF00D1FF)
@@ -2104,8 +2272,8 @@ class _LmOverlayPainter extends CustomPainter {
         final pts = faces[i];
         final isSel = (i == selectedFace);
         for (final p in pts) {
-          final dx = p.dx * paintSize.width;
-          final dy = p.dy * paintSize.height;
+          final dx = content.left + p.dx * content.width;
+          final dy = content.top + p.dy * content.height;
           canvas.drawCircle(
             Offset(dx, dy),
             isSel ? 2.2 : 1.4,
@@ -2114,13 +2282,14 @@ class _LmOverlayPainter extends CustomPainter {
         }
       }
     }
+
     for (int i = 0; i < faceRects.length; i++) {
       final r = faceRects[i];
       final rectPx = Rect.fromLTRB(
-        r.left * paintSize.width,
-        r.top * paintSize.height,
-        r.right * paintSize.width,
-        r.bottom * paintSize.height,
+        content.left + r.left * content.width,
+        content.top + r.top * content.height,
+        content.left + r.right * content.width,
+        content.top + r.bottom * content.height,
       );
       final isSel = (i == selectedFace);
       final stroke = Paint()
@@ -2155,7 +2324,8 @@ class _LmOverlayPainter extends CustomPainter {
       old.selectedFace != selectedFace ||
       old.paintSize != paintSize ||
       old.showLm != showLm ||
-      old.dimOthers != dimOthers;
+      old.dimOthers != dimOthers ||
+      old.imageContentRect != imageContentRect; // ✅
 }
 
 class _ZeroTick extends StatelessWidget {
