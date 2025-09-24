@@ -1345,168 +1345,175 @@ class _EditViewScreenState extends State<EditViewScreen> {
           child: Stack(
             children: [
               // 내용
-              ListView(
-                padding: const EdgeInsets.only(bottom: 120), // ✅ 바텀바 높이+여유
-                children: [
-                  Column(
-                    children: [
-                      // 헤더
-                      Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            GestureDetector(
-                              onTap: _handleBack,
-                              child: const Icon(
-                                Icons.arrow_back_ios,
-                                color: Color(0xFF625F8C),
-                                size: 24,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            UserIconButton(
-                              photoUrl:
-                                  FirebaseAuth.instance.currentUser?.photoURL,
-                              radius: 24,
-                            ),
-                            const SizedBox(width: 10),
-                            const Text(
-                              '편집',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF625F8C),
-                              ),
-                            ),
-                            const Spacer(),
-                            GestureDetector(
-                              onTap: _onTapCall,
-                              child: Image.asset(
-                                'assets/icons/call_off.png',
-                                width: 32,
-                                height: 32,
-                                fit: BoxFit.contain,
-                              ),
-                            ),
-                            const SizedBox(width: 8), // 아이콘과 앨범 이름 간격
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(16),
-                                gradient: const LinearGradient(
-                                  colors: [
-                                    Color(0xFFC6DCFF),
-                                    Color(0xFFD2D1FF),
-                                    Color(0xFFF5CFFF),
-                                  ],
+              SingleChildScrollView(
+                physics: const NeverScrollableScrollPhysics(), // 아예 드래그 안됨
+                child: Column(
+                  children: [
+                    Column(
+                      children: [
+                        // 헤더
+                        Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              GestureDetector(
+                                onTap: _handleBack,
+                                child: const Icon(
+                                  Icons.arrow_back_ios,
+                                  color: Color(0xFF625F8C),
+                                  size: 24,
                                 ),
                               ),
-                              child: Text(
-                                widget.albumName,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white,
+                              const SizedBox(width: 8),
+                              UserIconButton(
+                                photoUrl:
+                                    FirebaseAuth.instance.currentUser?.photoURL,
+                                radius: 24,
+                              ),
+                              const SizedBox(width: 10),
+                              const Text(
+                                '편집',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF625F8C),
                                 ),
                               ),
-                            ),
-                          ],
+                              const Spacer(),
+                              GestureDetector(
+                                onTap: _onTapCall,
+                                child: Image.asset(
+                                  'assets/icons/call_off.png',
+                                  width: 32,
+                                  height: 32,
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                              const SizedBox(width: 8), // 아이콘과 앨범 이름 간격
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(16),
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFFC6DCFF),
+                                      Color(0xFFD2D1FF),
+                                      Color(0xFFF5CFFF),
+                                    ],
+                                  ),
+                                ),
+                                child: Text(
+                                  widget.albumName,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      // [추가] 앨범 이름 아래 통화 아이콘
+                        // [추가] 앨범 이름 아래 통화 아이콘
 
-                      // **[변경]** 배지를 통째로 숨기고, 고정 높이만 유지(레이아웃 흔들림 방지)
-                      if (_kShowEditorsBadge &&
-                          widget.albumId != null &&
-                          _targetKey != null)
+                        // **[변경]** 배지를 통째로 숨기고, 고정 높이만 유지(레이아웃 흔들림 방지)
+                        if (_kShowEditorsBadge &&
+                            widget.albumId != null &&
+                            _targetKey != null)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16.0,
+                            ),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: SizedBox(
+                                height: 32, // 배지 자리 고정
+                                child: StreamBuilder<List<_EditorPresence>>(
+                                  stream: _watchEditorsForTargetRT(),
+                                  builder: (context, snap) {
+                                    final editors =
+                                        snap.data ?? const <_EditorPresence>[];
+                                    if (editors.isEmpty)
+                                      return const SizedBox();
+                                    final first = editors.first;
+                                    final others = editors.length - 1;
+                                    final label = (others <= 0)
+                                        ? '${first.name} 편집중'
+                                        : '${first.name} 외 $others명 편집중';
+                                    return _editingBadge(label);
+                                  },
+                                ),
+                              ),
+                            ),
+                          )
+                        else
+                          const SizedBox(
+                            height: 12,
+                          ), // **[추가]** 여백만 남겨서 화면 위치 고정
+                        // 저장 버튼
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: SizedBox(
-                              height: 32, // 배지 자리 고정
-                              child: StreamBuilder<List<_EditorPresence>>(
-                                stream: _watchEditorsForTargetRT(),
-                                builder: (context, snap) {
-                                  final editors =
-                                      snap.data ?? const <_EditorPresence>[];
-                                  if (editors.isEmpty) return const SizedBox();
-                                  final first = editors.first;
-                                  final others = editors.length - 1;
-                                  final label = (others <= 0)
-                                      ? '${first.name} 편집중'
-                                      : '${first.name} 외 $others명 편집중';
-                                  return _editingBadge(label);
-                                },
+                          child: Row(
+                            children: [
+                              const Spacer(),
+                              _gradientPillButton(label: '저장', onTap: _onSave),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+
+                        // 편집 Stage
+                        Container(
+                          height: MediaQuery.of(context).size.height * 0.55,
+                          margin: const EdgeInsets.symmetric(horizontal: 16),
+                          decoration: BoxDecoration(
+                            color: Colors.transparent,
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 6,
+                                offset: Offset(2, 2),
                               ),
+                            ],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(20),
+                            child: RepaintBoundary(
+                              key: _captureKey,
+                              child: _buildEditableStage(),
                             ),
                           ),
-                        )
-                      else
-                        const SizedBox(height: 12), // **[추가]** 여백만 남겨서 화면 위치 고정
-                      // 저장 버튼
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                        child: Row(
-                          children: [
-                            const Spacer(),
-                            _gradientPillButton(label: '저장', onTap: _onSave),
-                          ],
                         ),
-                      ),
-                      const SizedBox(height: 12),
+                        const SizedBox(height: 20),
 
-                      // 편집 Stage
-                      Container(
-                        height: MediaQuery.of(context).size.height * 0.55,
-                        margin: const EdgeInsets.symmetric(horizontal: 16),
-                        decoration: BoxDecoration(
-                          color: Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: Colors.black12,
-                              blurRadius: 6,
-                              offset: Offset(2, 2),
-                            ),
-                          ],
-                        ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(20),
-                          child: RepaintBoundary(
-                            key: _captureKey,
-                            child: _buildEditableStage(),
+                        // 하단 툴바 박스
+                        Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 20),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
                           ),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: const [
+                              BoxShadow(color: Colors.black12, blurRadius: 4),
+                            ],
+                          ),
+                          child: _isFaceEditMode
+                              ? _buildFaceEditToolbar()
+                              : _buildMainToolbar(),
                         ),
-                      ),
-                      const SizedBox(height: 20),
-
-                      // 하단 툴바 박스
-                      Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 20),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(18),
-                          boxShadow: const [
-                            BoxShadow(color: Colors.black12, blurRadius: 4),
-                          ],
-                        ),
-                        child: _isFaceEditMode
-                            ? _buildFaceEditToolbar()
-                            : _buildMainToolbar(),
-                      ),
-                      const SizedBox(height: 80),
-                    ],
-                  ),
-                ],
+                        const SizedBox(height: 80),
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -1812,26 +1819,37 @@ class _EditViewScreenState extends State<EditViewScreen> {
     key: const ValueKey('crop'),
     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
     children: [
+      // _cropPanel()의 '초기화' onTap 안
       _pill('초기화', () async {
+        // 1) 스테이지 핸들/미리보기 리셋
         setState(() {
           _cropRectStage = null;
-          _editedBytes = null; // 원본으로 복귀
+          _editedBytes = null;
         });
-        // ✅ 초기화 직후 현재 지오메트리 기준 사이즈 재계산
-        final basePng = await _renderBaseForBeauty();
-        final im = img.decodeImage(basePng);
-        if (im != null) {
-          setState(() {
-            _geoImgSize = Size(im.width.toDouble(), im.height.toDouble());
-          });
-        }
-        await _refreshGeoSizeFromCurrentGeometry();
-        await _reapplyAdjustmentsIfActive(); // ✅ 밝기/채도/샤픈 최신 베이스로 재합성
 
-        // (선택) 동기화를 원하면 전체영역 크롭을 브로드캐스트
+        // 2) ✅ 누적된 '자르기' 연산 제거 (핵심)
+        _ops.removeWhere((op) => op.type == EditOpType.crop);
+
+        // 3) 지오메트리 기준 사이즈 갱신
+        await _refreshGeoSizeFromCurrentGeometry();
+
+        // 4) ✅ 전체 파이프라인 재합성해서 화면에 반영
+        final composed = await _renderFullPipelinePng();
+        setState(() {
+          _editedBytes = composed;
+        });
+
+        // (선택) 밝기/채도/샤픈이 켜져 있으면 최신 베이스로 재합성
+        // -> 이미 4)에서 반영되므로 별도 호출 불필요. 원하시면 유지 가능.
+        // await _reapplyAdjustmentsIfActive();
+
+        // 5) 동기화: 전체 영역 크롭 브로드캐스트
         await _sendOp('crop', {'l': 0.0, 't': 0.0, 'r': 1.0, 'b': 1.0});
+
+        // 6) 얼굴 재검출 스케줄
         _scheduleRedetect();
       }),
+
       _pill('맞춤', () {
         if (_lastStageSize == null) return;
         final s = _lastStageSize!;
