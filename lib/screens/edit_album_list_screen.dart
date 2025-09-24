@@ -21,10 +21,8 @@ class _EditAlbumListScreenState extends State<EditAlbumListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
-      bottomNavigationBar: const Padding(
-        padding: EdgeInsets.only(bottom: 20, left: 20, right: 20),
-        child: CustomBottomNavBar(selectedIndex: 2),
-      ),
+      bottomNavigationBar: const CustomBottomNavBar(selectedIndex: 0),
+
       body: SafeArea(
         child: Column(
           children: [
