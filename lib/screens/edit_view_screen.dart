@@ -785,9 +785,18 @@ class _EditViewScreenState extends State<EditViewScreen> {
           final t = (data['t'] as num).toDouble();
           final r = (data['r'] as num).toDouble();
           final b = (data['b'] as num).toDouble();
-          final normRect = Rect.fromLTRB(l, t, r, b);
+          final reset = (data['reset'] as bool?) ?? false;
+          if (reset) {
+            // ★ 진짜 초기화: 누적된 crop 연산 삭제
+            _ops.removeWhere((op) => op.type == EditOpType.crop);
+          } else {
+            // 일반 크롭은 누적
+            final normRect = Rect.fromLTRB(l, t, r, b);
+            _ops.add(EditOp(EditOpType.crop, crop: normRect));
+            _dirty = true;
+          }
 
-          _ops.add(EditOp(EditOpType.crop, crop: normRect));
+          // 전체 파이프라인 재합성 + 사이즈/얼굴 재검출
           final composed = await _renderFullPipelinePng();
           setState(() => _editedBytes = composed);
           await _refreshGeoSizeFromCurrentGeometry();
@@ -1844,7 +1853,13 @@ class _EditViewScreenState extends State<EditViewScreen> {
         // await _reapplyAdjustmentsIfActive();
 
         // 5) 동기화: 전체 영역 크롭 브로드캐스트
-        await _sendOp('crop', {'l': 0.0, 't': 0.0, 'r': 1.0, 'b': 1.0});
+        await _sendOp('crop', {
+          'l': 0.0,
+          't': 0.0,
+          'r': 1.0,
+          'b': 1.0,
+          'reset': true, // ★ 추가: 전체 초기화임을 표시
+        });
 
         // 6) 얼굴 재검출 스케줄
         _scheduleRedetect();
