@@ -1316,178 +1316,203 @@ class _EditScreenState extends State<EditScreen> {
     }
   }
 
-  // 하단 액션: 편집된 사진 탭 시  ✅ UI만 수정
+  // 하단 액션: 편집된 사진 탭 시  ✅ 크기 줄인 버전
   void _showEditedActions(BuildContext context, EditedPhoto item) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true, // 내용이 작아서 높이 최소화
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) {
-        return SafeArea(
-          child: LayoutBuilder(
-            builder: (ctx, constraints) {
-              // 시트 너비/버튼 너비를 화면에 맞게 계산
-              final sheetW = math.min(constraints.maxWidth, 520.0);
-              final btnW = math.min(360.0, sheetW * 0.60); // 버튼 가로 살짝 줄임
+        return GestureDetector(
+          // 바깥(투명 영역) 터치 시 닫힘
+          onTap: () => Navigator.pop(context),
+          behavior: HitTestBehavior.opaque,
+          child: SafeArea(
+            child: LayoutBuilder(
+              builder: (ctx, constraints) {
+                // 시트 사이즈 조절
+                final sheetW = math.min(constraints.maxWidth * 0.88, 420.0);
+                final maxSheetH = 260.0;
+                final btnW = math.min(320.0, sheetW * 0.56);
 
-              // 공통 액션 Row (가운데 정렬)
-              Widget actionRow({
-                required String iconPath,
-                required String label,
-                required VoidCallback onTap,
-              }) {
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // ✅ 아이콘 배경 제거 + 크기 키움
-                    Image.asset(
-                      iconPath,
-                      width: 36,
-                      height: 36,
-                      fit: BoxFit.contain,
-                    ),
-                    const SizedBox(width: 18),
-                    // ✅ 버튼 가로 줄이고 테두리 제거, 그라데이션만
-                    InkWell(
-                      onTap: onTap,
-                      borderRadius: BorderRadius.circular(24),
-                      child: Container(
-                        width: btnW,
-                        height: 56,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [
-                              Color(0xFFC6DCFF),
-                              Color(0xFFD2D1FF),
-                              Color(0xFFF5CFFF),
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: Text(
-                          label,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 20,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              }
-
-              return Center(
-                child: Container(
-                  width: sheetW,
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 22,
-                    horizontal: 16,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF6F9FF).withOpacity(0.95),
-                    borderRadius: BorderRadius.circular(28),
-                    border: Border.all(
-                      color: const Color(0xFF625F8C),
-                      width: 2,
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center, // ✅ 전체 가운데
+                // ✅ 로컬 헬퍼: 아이콘 + 그라데이션 버튼 한 줄
+                Widget actionRowL(
+                  String icon,
+                  String label,
+                  VoidCallback onTap,
+                ) {
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      actionRow(
-                        iconPath: 'assets/icons/edit.png',
-                        label: '편집하기',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          if (_isNavigating) return;
-                          _isNavigating = true;
-                          try {
-                            await _svc.setEditing(
-                              uid: _uid,
-                              albumId: widget.albumId,
-                              photoId: (item.originalPhotoId ?? '').isNotEmpty
-                                  ? item.originalPhotoId
-                                  : null,
-                              photoUrl: item.url,
-                              source: 'edited',
-                              editedId: item.id,
-                              originalPhotoId:
-                                  ((item.originalPhotoId ?? '').isNotEmpty)
-                                  ? item.originalPhotoId
-                                  : null,
-                              userDisplayName: _meName,
-                            );
-                            if (!mounted) {
-                              _isNavigating = false;
-                              return;
-                            }
-                            await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => EditViewScreen(
-                                  albumName: widget.albumName,
-                                  albumId: widget.albumId,
-                                  imagePath: item.url,
-                                  editedId: item.id,
-                                ),
-                              ),
-                            );
-                          } catch (e) {
-                            if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('편집 세션 생성 실패: $e')),
-                              );
-                            }
-                          } finally {
-                            _isNavigating = false;
-                          }
-                        },
+                      Image.asset(
+                        icon,
+                        width: 32,
+                        height: 32,
+                        fit: BoxFit.contain,
                       ),
-                      const SizedBox(height: 18),
-
-                      actionRow(
-                        iconPath: 'assets/icons/download.png',
-                        label: '다운로드',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          await _downloadEditedPhoto(item.url);
-                        },
-                      ),
-                      const SizedBox(height: 18),
-
-                      actionRow(
-                        iconPath: 'assets/icons/delete_.png',
-                        label: '삭제',
-                        onTap: () async {
-                          Navigator.pop(context);
-                          try {
-                            await _svc.deleteEditedPhoto(
-                              albumId: widget.albumId,
-                              editedId: item.id,
-                            );
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('편집된 사진을 삭제했습니다.')),
-                            );
-                          } catch (e) {
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('삭제 실패: $e')),
-                            );
-                          }
-                        },
+                      const SizedBox(width: 14),
+                      InkWell(
+                        onTap: onTap,
+                        borderRadius: BorderRadius.circular(24),
+                        child: Container(
+                          width: btnW,
+                          height: 52,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [
+                                Color(0xFFC6DCFF),
+                                Color(0xFFD2D1FF),
+                                Color(0xFFF5CFFF),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: Text(
+                            label,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 18,
+                            ),
+                          ),
+                        ),
                       ),
                     ],
+                  );
+                }
+
+                return Padding(
+                  // ⬆️ 더 올리고 싶으면 값을 늘리세요 (예: 56 → 72)
+                  padding: const EdgeInsets.only(bottom: 56),
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: sheetW,
+                        maxHeight: maxSheetH,
+                      ),
+                      // 내용부 탭이 배경으로 전파되지 않게 막기
+                      child: GestureDetector(
+                        onTap: () {},
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 16,
+                            horizontal: 14,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF6F9FF).withOpacity(0.96),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: const Color(0xFF625F8C),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              actionRowL(
+                                'assets/icons/edit.png',
+                                '편집하기',
+                                () async {
+                                  Navigator.pop(context);
+                                  if (_isNavigating) return;
+                                  _isNavigating = true;
+                                  try {
+                                    await _svc.setEditing(
+                                      uid: _uid,
+                                      albumId: widget.albumId,
+                                      photoId:
+                                          (item.originalPhotoId ?? '')
+                                              .isNotEmpty
+                                          ? item.originalPhotoId
+                                          : null,
+                                      photoUrl: item.url,
+                                      source: 'edited',
+                                      editedId: item.id,
+                                      originalPhotoId:
+                                          ((item.originalPhotoId ?? '')
+                                              .isNotEmpty)
+                                          ? item.originalPhotoId
+                                          : null,
+                                      userDisplayName: _meName,
+                                    );
+                                    if (!mounted) {
+                                      _isNavigating = false;
+                                      return;
+                                    }
+                                    await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => EditViewScreen(
+                                          albumName: widget.albumName,
+                                          albumId: widget.albumId,
+                                          imagePath: item.url,
+                                          editedId: item.id,
+                                        ),
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text('편집 세션 생성 실패: $e'),
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    _isNavigating = false;
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                              actionRowL(
+                                'assets/icons/download.png',
+                                '다운로드',
+                                () async {
+                                  Navigator.pop(context);
+                                  await _downloadEditedPhoto(item.url);
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                              actionRowL(
+                                'assets/icons/delete_.png',
+                                '삭제',
+                                () async {
+                                  Navigator.pop(context);
+                                  try {
+                                    await _svc.deleteEditedPhoto(
+                                      albumId: widget.albumId,
+                                      editedId: item.id,
+                                    );
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('편집된 사진을 삭제했습니다.'),
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('삭제 실패: $e')),
+                                    );
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         );
       },

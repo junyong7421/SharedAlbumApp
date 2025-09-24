@@ -634,7 +634,7 @@ class _FriendPickerSheetState extends State<_FriendPickerSheet> {
                                         ),
                                         if (already)
                                           const Text(
-                                            '이미 멤버',
+                                            '존재하는 멤버',
                                             style: TextStyle(
                                               color: textColor,
                                               fontWeight: FontWeight.w600,
