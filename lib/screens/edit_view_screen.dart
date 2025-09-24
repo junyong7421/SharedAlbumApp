@@ -1946,15 +1946,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _pill('초기화', () {
-            setState(() => _saturation = 0.0);
-            _applySaturation();
-          }),
-        ],
-      ),
       if (_saturationApplying)
         const SizedBox(height: 2, child: LinearProgressIndicator()),
     ],
@@ -1980,15 +1971,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
           ),
           const Icon(Icons.hdr_strong, size: 18),
           const SizedBox(width: 8),
-        ],
-      ),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _pill('초기화', () {
-            setState(() => _sharp = 0.0); // ← 샤픈 값을 리셋
-            _applySharpen(); // ← 샤픈 적용 함수 호출
-          }),
         ],
       ),
       if (_sharpenApplying)
