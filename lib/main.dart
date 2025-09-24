@@ -21,10 +21,16 @@ void enableLiveKitDebugLogs() {
 }
 
 /// [병합] FirebaseAuth 로그인 보장 (익명 로그인)
-Future<void> _ensureSignedIn() async {
-  if (FirebaseAuth.instance.currentUser == null) {
-    final cred = await FirebaseAuth.instance.signInAnonymously();
-    dev.log('Signed in anonymously: ${cred.user?.uid}', name: 'Auth');
+Future<User?> _safeEnsureSignedIn() async {
+  try {
+    final auth = FirebaseAuth.instance;
+    if (auth.currentUser != null) return auth.currentUser;
+    final cred = await auth.signInAnonymously(); // 콘솔에서 Anonymous 꺼져있으면 예외
+    return cred.user;
+  } catch (e) {
+    debugPrint('Anonymous sign-in failed: $e');
+    // 로그인 강제하지 않고 게스트/비로그인 모드로 계속 진행
+    return FirebaseAuth.instance.currentUser; // 여전히 null일 수 있음
   }
 }
 
@@ -32,37 +38,25 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
 
-  // [병합/유지] App Check 활성화 (안드로이드 디버그 강제, iOS는 디버그 시 debug)
+  // App Check: 개발은 debug, 배포는 정식 프로바이더
   await FirebaseAppCheck.instance.activate(
-    androidProvider: AndroidProvider.debug, // 물리 단말 Play Services 이슈 회피
-    appleProvider: kDebugMode ? AppleProvider.debug : AppleProvider.appAttest,
+    androidProvider: kReleaseMode ? AndroidProvider.playIntegrity : AndroidProvider.debug,
+    appleProvider: kReleaseMode ? AppleProvider.deviceCheck : AppleProvider.debug,
   );
-
-  // [유지] App Check 토큰 자동 갱신
   await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
-
-  // [병합] 디버그 환경에서 사전 토큰 발급 로그
   if (kDebugMode) {
-    try {
-      final token = await FirebaseAppCheck.instance.getToken(true); // 강제 갱신
-      debugPrint('🔥 App Check debug token: $token');
-    } catch (e) {
-      debugPrint('App Check token fetch failed: $e');
-    }
+    try { await FirebaseAppCheck.instance.getToken(true); } catch (e) { debugPrint('AppCheck token: $e'); }
   }
 
-  // [병합] Auth 보장 + ID 토큰 강제 갱신(Functions 401 방지)
-  await _ensureSignedIn(); // 익명 로그인 보장
-  await FirebaseAuth.instance.currentUser!.getIdToken(true); // **중요: 강제 갱신**
-  await FirebaseAuth.instance.authStateChanges().firstWhere((u) => u != null);
+  // 로그인 시도(실패해도 크래시 X)
+  final user = await _safeEnsureSignedIn();
 
-  // [추가] 최종 셀프 체크 로그
-  final uid = FirebaseAuth.instance.currentUser?.uid;
-  final idt = await FirebaseAuth.instance.currentUser?.getIdToken();
-  debugPrint('Auth uid=$uid, idToken? ${idt != null}');
-
-  // [병합] LiveKit 로그 알림
-  enableLiveKitDebugLogs();
+  // user가 있을 때만 ID 토큰 강제 갱신
+  if (user != null) {
+    try { await user.getIdToken(true); } catch (e) { debugPrint('getIdToken failed: $e'); }
+  } else {
+    debugPrint('No user session. Running without authentication.');
+  }
 
   runApp(const MyApp());
 }
