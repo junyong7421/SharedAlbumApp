@@ -288,6 +288,86 @@ class _EditViewScreenState extends State<EditViewScreen> {
     return _editedBytes ?? _originalBytes!;
   }
 
+  // 정규화 좌표(0~1)용 회전/반전 매핑
+  Offset _applyRotationNorm(Offset p, int deg) {
+    final d = ((deg % 360) + 360) % 360;
+    switch (d) {
+      case 90: // +90° CW
+        return Offset(1 - p.dy, p.dx);
+      case 180: // +180°
+        return Offset(1 - p.dx, 1 - p.dy);
+      case 270: // +270° CW == -90°
+        return Offset(p.dy, 1 - p.dx);
+      default: // 0°
+        return p;
+    }
+  }
+
+  Offset _applyFlipNorm(Offset p, {bool h = false, bool v = false}) {
+    double x = p.dx, y = p.dy;
+    if (h) x = 1 - x;
+    if (v) y = 1 - y;
+    return Offset(x, y);
+  }
+
+  // p: 0~1 정규화 좌표, cropNorm: 0~1 정규화 크롭(Rect.fromLTRB(l,t,r,b))
+  Offset _applyCropNorm(Offset p, Rect cropNorm) {
+    final w = (cropNorm.width).clamp(1e-9, 1.0);
+    final h = (cropNorm.height).clamp(1e-9, 1.0);
+    return Offset((p.dx - cropNorm.left) / w, (p.dy - cropNorm.top) / h);
+  }
+
+  Offset _clamp01(Offset p) =>
+      Offset(p.dx.clamp(0.0, 1.0), p.dy.clamp(0.0, 1.0));
+
+  void _transformFacesForGeometryChange({
+    int rotDeltaDeg = 0,
+    bool flipHDelta = false,
+    bool flipDeltaV = false, // 오타 아님? => flipVDelta로 쓰세요
+    Rect? cropNormDelta, // 새로 적용된 크롭(정규화)
+  }) {
+    if (_faces468.isEmpty) return;
+
+    // 1) 기존 랜드마크에 델타 변환만 적용
+    List<List<Offset>> newFaces = _faces468.map((face) {
+      Iterable<Offset> pts = face;
+
+      // 좌우/상하 델타
+      if (flipHDelta) pts = pts.map((p) => _applyFlipNorm(p, h: true));
+      if (flipDeltaV)
+        pts = pts.map((p) => _applyFlipNorm(p, v: true)); // 이름 통일 시 v:true
+
+      // 회전 델타 (정규화 기준)
+      if ((rotDeltaDeg % 360) != 0) {
+        pts = pts.map((p) => _applyRotationNorm(p, rotDeltaDeg));
+      }
+
+      // 크롭 델타 (정규화)
+      if (cropNormDelta != null) {
+        pts = pts.map((p) => _applyCropNorm(p, cropNormDelta));
+      }
+
+      return pts.map(_clamp01).toList();
+    }).toList();
+
+    // 2) rect 재계산
+    final rects = newFaces.map((pts) {
+      double minX = 1, minY = 1, maxX = 0, maxY = 0;
+      for (final p in pts) {
+        if (p.dx < minX) minX = p.dx;
+        if (p.dy < minY) minY = p.dy;
+        if (p.dx > maxX) maxX = p.dx;
+        if (p.dy > maxY) maxY = p.dy;
+      }
+      return Rect.fromLTRB(minX, minY, maxX, maxY);
+    }).toList();
+
+    setState(() {
+      _faces468 = newFaces;
+      _faceRects = rects;
+    });
+  }
+
   // === 정규화 크롭 유틸 (이미지 좌표계 기준)
   Future<Uint8List> _cropNormalizedBytes(Uint8List src, Rect norm) async {
     final codec = await ui.instantiateImageCodec(src);
@@ -595,6 +675,12 @@ class _EditViewScreenState extends State<EditViewScreen> {
             _dirty = true;
           });
 
+          final im = img.decodeImage(out);
+          if (im != null) {
+            _geoImgSize = Size(im.width.toDouble(), im.height.toDouble());
+          }
+
+          _transformFacesForGeometryChange(cropNormDelta: normRect);
           // 밝기/채도/샤픈 등의 "결정적 앵커"가 있다면 재적용
           await _reapplyAdjustmentsIfActive();
           break;
@@ -607,13 +693,17 @@ class _EditViewScreenState extends State<EditViewScreen> {
           setState(() => _editedBytes = ImageOps.rotate(bytesR, deg));
 
           _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
+          _transformFacesForGeometryChange(rotDeltaDeg: deg);
+          if (_geoImgSize != null && (deg % 180 != 0)) {
+            _geoImgSize = Size(_geoImgSize!.height, _geoImgSize!.width); // ✅
+          }
           await _reapplyAdjustmentsIfActive();
           break;
         }
 
       case 'flip':
         {
-          final dir = (data['dir'] as String?) ?? 'h'; // 'h' | 'v'
+          final dir = (data['dir'] as String?) ?? 'h';
           final bytesF = await _currentBytes();
           setState(() {
             _editedBytes = (dir == 'v')
@@ -623,10 +713,11 @@ class _EditViewScreenState extends State<EditViewScreen> {
 
           if (dir == 'v') {
             _flipVState = !_flipVState;
+            _transformFacesForGeometryChange(flipDeltaV: true);
           } else {
             _flipHState = !_flipHState;
+            _transformFacesForGeometryChange(flipHDelta: true);
           }
-          await _rerunFaceDetectOnCurrentGeometry();
           await _reapplyAdjustmentsIfActive();
           break;
         }
@@ -726,10 +817,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
   }
 
   Future<void> _reapplyAdjustmentsIfActive() async {
-    // 얼굴보정 파라미터가 있으면 지오메트리 변경 후 항상 재검출
-    if (_faceParams.isNotEmpty) {
-      await _rerunFaceDetectOnCurrentGeometry();
-    }
+    // ❌ 재검출 제거
     final composed = await _renderFullPipelinePng();
     setState(() {
       _editedBytes = composed;
@@ -741,13 +829,52 @@ class _EditViewScreenState extends State<EditViewScreen> {
   Future<void> _rerunFaceDetectOnCurrentGeometry() async {
     try {
       await _ensureFaceModelLoaded();
-      final basePng = await _renderBaseForBeauty(); // 원본→회전→반전→크롭 적용된 PNG
-      final im = img.decodeImage(basePng)!;
-      _geoImgSize = Size(im.width.toDouble(), im.height.toDouble());
-      final faces = await FaceLandmarker.detect(basePng);
 
-      // 정규화 바운딩 박스 갱신
-      final rects = faces.map((pts) {
+      // 0) 현재 지오메트리 기준 PNG (회전/반전/크롭 반영됨)
+      final basePng = await _renderBaseForBeauty();
+      final im = img.decodeImage(basePng)!;
+      final newSize = Size(im.width.toDouble(), im.height.toDouble());
+
+      // --- 기존 rects 백업
+      final oldRects = List<Rect>.from(_faceRects);
+
+      // 1) 탐지 입력을 "정방향"으로 되돌림
+      Uint8List detBytes = basePng;
+
+      // 회전 되돌리기: 모델은 정방향에서 잘 됨 → -_rotDeg
+      if (_rotDeg % 360 != 0) {
+        detBytes = ImageOps.rotate(detBytes, -_rotDeg);
+      }
+      // 상하반전 되돌리기: 모델은 upside-down에 약함 → flipV도 되돌림
+      if (_flipVState) {
+        detBytes = ImageOps.flipVertical(detBytes);
+      }
+      // 좌우반전은 현 상태 그대로 두어도 탐지율에 영향이 거의 없어서 pass
+      // (필요하면 _flipHState도 되돌리고, 나중에 다시 적용해도 됩니다)
+
+      // 2) 정방향에서 탐지
+      final facesUpright = await FaceLandmarker.detect(detBytes);
+
+      // 3) 탐지 좌표를 다시 "현재 지오메트리"로 되돌림
+      //    - 우리는 detBytes를 만들 때 (회전 -_rotDeg) → (V 플립 복원) 을 했으므로
+      //      좌표는 반대로 (V 플립 재적용) → (회전 +_rotDeg) 를 해줌.
+      List<List<Offset>> facesTransformed = facesUpright.map((pts) {
+        // 먼저 V플립을 다시 적용
+        var out = pts.map((p) => _applyFlipNorm(p, v: _flipVState)).toList();
+        // 그 다음 회전 +_rotDeg 적용
+        out = out.map((p) => _applyRotationNorm(p, _rotDeg)).toList();
+        return out;
+      }).toList();
+
+      // 4) (선택) 좌우 반전도 탐지 입력에서 되돌렸다면, 여기서 다시 적용
+      // if (_flipHState) {
+      //   facesTransformed = facesTransformed
+      //       .map((pts) => pts.map((p) => _applyFlipNorm(p, h: true)).toList())
+      //       .toList();
+      // }
+
+      // 5) rect 계산
+      final rects = facesTransformed.map((pts) {
         double minX = 1, minY = 1, maxX = 0, maxY = 0;
         for (final p in pts) {
           if (p.dx < minX) minX = p.dx;
@@ -758,17 +885,33 @@ class _EditViewScreenState extends State<EditViewScreen> {
         return Rect.fromLTRB(minX, minY, maxX, maxY); // 0~1
       }).toList();
 
+      // 6) 기존 파라미터 인덱스 매칭(중심거리로)
+      Map<int, int>? mapping;
+      if (_faceParams.isNotEmpty && oldRects.isNotEmpty && rects.isNotEmpty) {
+        mapping = _matchFacesByCenter(oldRects, rects, newSize);
+        if (mapping.isNotEmpty) {
+          final remapped = <int, BeautyParams>{};
+          _faceParams.forEach((oldIdx, params) {
+            final ni = mapping![oldIdx];
+            if (ni != null) remapped[ni] = params;
+          });
+          _faceParams
+            ..clear()
+            ..addAll(remapped);
+        }
+      }
+
       if (!mounted) return;
       setState(() {
-        _faces468 = faces;
+        _faces468 = facesTransformed;
         _faceRects = rects;
-        // 선택된 얼굴이 이전 인덱스와 맞지 않을 수 있으니 필요시 해제
-        if (_selectedFace != null && _selectedFace! >= _faceRects.length) {
-          _selectedFace = null;
+        _geoImgSize = newSize;
+
+        if (_selectedFace != null && mapping != null) {
+          _selectedFace = mapping[_selectedFace!];
         }
       });
     } catch (e) {
-      // 필요시 로깅
       debugPrint('Face re-detect failed: $e');
     }
   }
@@ -933,6 +1076,50 @@ class _EditViewScreenState extends State<EditViewScreen> {
     final dx = (paintSize.width - renderSize.width) / 2;
     final dy = (paintSize.height - renderSize.height) / 2;
     return Rect.fromLTWH(dx, dy, renderSize.width, renderSize.height);
+  }
+
+  Rect _rectFromNorm(Rect r, Size imgSize) => Rect.fromLTWH(
+    r.left * imgSize.width,
+    r.top * imgSize.height,
+    r.width * imgSize.width,
+    r.height * imgSize.height,
+  );
+
+  double _centerDistSq(Rect a, Rect b) {
+    final ca = a.center, cb = b.center;
+    final dx = ca.dx - cb.dx, dy = ca.dy - cb.dy;
+    return dx * dx + dy * dy; // sqrt 불필요
+  }
+
+  Map<int, int> _matchFacesByCenter(
+    List<Rect> oldRects,
+    List<Rect> newRects,
+    Size imgPxSize,
+  ) {
+    // 픽셀 좌표로 변환(정규화→픽셀) 후 중심거리로 가장 가까운 것 매칭
+    final oldPx = oldRects.map((r) => _rectFromNorm(r, imgPxSize)).toList();
+    final newPx = newRects.map((r) => _rectFromNorm(r, imgPxSize)).toList();
+
+    final usedNew = <int>{};
+    final mapping = <int, int>{}; // oldIdx -> newIdx
+
+    for (int oi = 0; oi < oldPx.length; oi++) {
+      double best = double.infinity;
+      int? bestNi;
+      for (int ni = 0; ni < newPx.length; ni++) {
+        if (usedNew.contains(ni)) continue;
+        final d2 = _centerDistSq(oldPx[oi], newPx[ni]); // ✅ 여기!
+        if (d2 < best) {
+          best = d2;
+          bestNi = ni;
+        }
+      }
+      if (bestNi != null) {
+        usedNew.add(bestNi);
+        mapping[oi] = bestNi;
+      }
+    }
+    return mapping;
   }
 
   // ======== 루트 키 계산 ========
@@ -1564,6 +1751,14 @@ class _EditViewScreenState extends State<EditViewScreen> {
           _editedBytes = null; // 원본으로 복귀
           _cropNorm = null; // ✅ 파이프라인 절대상태도 원복
         });
+        // ✅ 초기화 직후 현재 지오메트리 기준 사이즈 재계산
+        final basePng = await _renderBaseForBeauty();
+        final im = img.decodeImage(basePng);
+        if (im != null) {
+          setState(() {
+            _geoImgSize = Size(im.width.toDouble(), im.height.toDouble());
+          });
+        }
         await _reapplyAdjustmentsIfActive(); // ✅ 밝기/채도/샤픈 최신 베이스로 재합성
 
         // (선택) 동기화를 원하면 전체영역 크롭을 브로드캐스트
@@ -1811,6 +2006,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _cropNorm = normRect; // ✅ 파이프라인/재렌더용은 image-normalized로 보관
     });
 
+    _transformFacesForGeometryChange(cropNormDelta: normRect);
     await _reapplyAdjustmentsIfActive();
 
     // 5) 브로드캐스트도 image-normalized 값으로 전송 (상대가 정확히 재현)
@@ -1871,6 +2067,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
       _faceRects = [];
       _selectedFace = null;
       _beautyBasePng = null;
+      _geoImgSize = null;
     });
   }
 
@@ -1890,7 +2087,10 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _rotDeg = ((_rotDeg + deg) % 360 + 360) % 360;
-    await _rerunFaceDetectOnCurrentGeometry();
+    if (_geoImgSize != null && (deg % 180 != 0)) {
+      _geoImgSize = Size(_geoImgSize!.height, _geoImgSize!.width); // ✅
+    }
+    _transformFacesForGeometryChange(rotDeltaDeg: deg);
     await _reapplyAdjustmentsIfActive();
 
     await _sendOp('rotate', {'deg': deg});
@@ -1905,7 +2105,8 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _flipHState = !_flipHState;
-    await _rerunFaceDetectOnCurrentGeometry();
+    _transformFacesForGeometryChange(flipHDelta: true);
+
     // ② 그 다음 재합성(얼굴보정 포함)
     await _reapplyAdjustmentsIfActive();
 
@@ -1921,7 +2122,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
     });
 
     _flipVState = !_flipVState;
-    await _rerunFaceDetectOnCurrentGeometry();
+    _transformFacesForGeometryChange(flipDeltaV: true);
     await _reapplyAdjustmentsIfActive();
 
     await _sendOp('flip', {'dir': 'v'});
