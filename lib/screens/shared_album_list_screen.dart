@@ -25,10 +25,8 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       backgroundColor: const Color(0xFFE6EBFE),
 
       // 하단 네비게이션바
-      bottomNavigationBar: const Padding(
-        padding: EdgeInsets.only(bottom: 20, left: 20, right: 20),
-        child: CustomBottomNavBar(selectedIndex: 1),
-      ),
+      bottomNavigationBar: const CustomBottomNavBar(selectedIndex: 0),
+
 
       body: SafeArea(
         child: Column(

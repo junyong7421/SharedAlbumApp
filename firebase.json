@@ -1,16 +1,1 @@
-{
-  "functions": [
-    {
-      "source": "functions",
-      "codebase": "default",
-      "ignore": [
-        "node_modules",
-        ".git",
-        "firebase-debug.log",
-        "firebase-debug.*.log",
-        "*.local"
-      ],
-      "predeploy": []
-    }
-  ]
-}
+{"functions":[{"source":"functions","codebase":"default","ignore":["node_modules",".git","firebase-debug.log","firebase-debug.*.log","*.local"],"predeploy":[]}],"flutter":{"platforms":{"android":{"default":{"projectId":"sharedalbumapp","appId":"1:358024473338:android:fc46dad790c3a3e8263743","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"sharedalbumapp","configurations":{"android":"1:358024473338:android:fc46dad790c3a3e8263743"}}}}}}

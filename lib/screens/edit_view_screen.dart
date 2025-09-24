@@ -17,6 +17,9 @@ import 'package:sharedalbumapp/beauty/beauty_controller.dart';
 import '../edit_tools/image_ops.dart';
 import '../edit_tools/crop_overlay.dart';
 import 'package:image/image.dart' as img;
+import 'voice_call_popup.dart';
+import 'voice_call_overlay.dart';
+import '../services/shared_album_list_service.dart';
 
 class EditViewScreen extends StatefulWidget {
   final String albumName;
@@ -183,7 +186,7 @@ class _GradientButton extends StatelessWidget {
 class _EditViewScreenState extends State<EditViewScreen> {
   // **[추가]** 편집중 배지 표시 여부 (기본: 끔) -> 표시할거면 true로
   static const bool _kShowEditorsBadge = false;
-
+  final _listSvc = SharedAlbumListService.instance;
   // ▼ 4개 툴 전환: 0=자르기, 1=얼굴보정, 2=밝기, 3=회전/반전
   int _selectedTool = -1; // 0=자르기,1=얼굴보정,2=밝기,3=회전/반전
   Rect? _cropRectStage;
@@ -280,6 +283,67 @@ class _EditViewScreenState extends State<EditViewScreen> {
   bool _flipHState = false; // 좌우 반전
   bool _flipVState = false; // 상하 반전
   Rect? _cropNorm; // 0~1 정규화 크롭(l,t,r,b)
+
+  Future<String> _nameForAlbum(String id) async {
+    if ((widget.albumId ?? '') == id) return widget.albumName;
+    // 필요하면 SharedAlbumListService에서 이름을 더 찾아와도 됨.
+    return '보이스톡';
+  }
+
+  // 통화 버튼 onTap
+  Future<void> _onTapCall() async {
+    try {
+      // 1) 내가 이미 붙어있는 보이스룸이 있으면 그쪽으로, 아니면 화면의 albumId로
+      final activeAlbumId = await _listSvc.getMyActiveVoiceAlbumId();
+      final targetAlbumId = activeAlbumId ?? widget.albumId;
+
+      if (targetAlbumId == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('참여 중인 보이스룸이 없고, 이 화면에 앨범도 없어요.')),
+        );
+        return;
+      }
+
+      // 2) 입장 (이미 붙어있으면 내부에서 스킵)
+      await _listSvc.joinVoice(albumId: targetAlbumId);
+
+      // 3) 오버레이 + 참가자 팝업
+      final albumName = await _nameForAlbum(targetAlbumId);
+      voiceOverlay.show(albumId: targetAlbumId, albumName: albumName);
+
+      final stream = _listSvc
+          .watchVoiceParticipants(targetAlbumId)
+          .map(
+            (list) => list
+                .map(
+                  (m) => MemberLite(
+                    uid: m.uid,
+                    name: (m.name).isNotEmpty ? m.name : m.email,
+                  ),
+                )
+                .toList(),
+          );
+      final initial = await stream.first;
+      if (!mounted) return;
+
+      await showVoiceNowPopup(
+        context,
+        albumName: albumName,
+        initialParticipants: initial,
+        participantsStream: stream,
+        onLeave: () async {
+          await _listSvc.leaveVoice(albumId: targetAlbumId);
+          voiceOverlay.hide();
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('보이스톡 진입 실패: $e')));
+    }
+  }
 
   // ===== 공용 유틸 =====
   Future<Uint8List> _currentBytes() async {
@@ -1320,6 +1384,16 @@ class _EditViewScreenState extends State<EditViewScreen> {
                               ),
                             ),
                             const Spacer(),
+                            GestureDetector(
+                              onTap: _onTapCall,
+                              child: Image.asset(
+                                'assets/icons/call_off.png',
+                                width: 32,
+                                height: 32,
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                            const SizedBox(width: 8), // 아이콘과 앨범 이름 간격
                             Container(
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
@@ -1347,6 +1421,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                           ],
                         ),
                       ),
+                      // [추가] 앨범 이름 아래 통화 아이콘
 
                       // **[변경]** 배지를 통째로 숨기고, 고정 높이만 유지(레이아웃 흔들림 방지)
                       if (_kShowEditorsBadge &&

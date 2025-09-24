@@ -19,6 +19,9 @@ import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import 'voice_call_popup.dart'; // ★ 추가
+import 'voice_call_overlay.dart'; // ★ 추가
+
 // ===================== UID → 항상 같은 색 (안정 랜덤) =====================
 int _stableHash(String s) {
   int h = 5381;
@@ -451,6 +454,7 @@ class _EditScreenState extends State<EditScreen> {
   int _currentIndex = 0;
 
   final _svc = SharedAlbumService.instance;
+  final _listSvc = SharedAlbumListService.instance; // ★ 추가
   String get _uid => FirebaseAuth.instance.currentUser!.uid;
   String get _meName => FirebaseAuth.instance.currentUser?.displayName ?? '';
 
@@ -461,6 +465,70 @@ class _EditScreenState extends State<EditScreen> {
   final Map<String, String> _nameCache = {};
 
   // uid → 표시 이름 조회(users/{uid}.displayName → users/{uid}.name → auth.displayName → fallback)
+
+  Future<String> _nameForAlbum(String id) async {
+    // 현재 편집 중인 앨범이면 전달받은 타이틀 사용
+    if (id == widget.albumId) return widget.albumName;
+
+    // 내 공유 앨범 목록에서 찾아서 이름 반환
+    final myAlbums = await _listSvc.watchMySharedAlbums().first;
+    final hit = myAlbums.where((a) => a.id == id);
+    if (hit.isNotEmpty) return hit.first.name;
+
+    // 못 찾으면 기본 라벨
+    return '보이스톡';
+  }
+
+  Future<void> _onTapCall() async {
+    // ★ 추가
+    try {
+      final me = FirebaseAuth.instance.currentUser;
+      if (me == null) return;
+
+      // 내가 이미 붙어있는 보이스룸이 있으면 그쪽으로, 없으면 현재 앨범으로
+      final activeAlbumId = await _listSvc.getMyActiveVoiceAlbumId();
+      final targetAlbumId = activeAlbumId ?? widget.albumId;
+
+      // (이미 붙어있으면 내부에서 스킵됨)
+      await _listSvc.joinVoice(albumId: targetAlbumId);
+
+      // 오버레이 + 참가자 팝업
+      final albumName = await _nameForAlbum(targetAlbumId);
+      voiceOverlay.show(albumId: targetAlbumId, albumName: albumName);
+
+      final stream = _listSvc
+          .watchVoiceParticipants(targetAlbumId)
+          .map(
+            (list) => list
+                .map(
+                  (m) => MemberLite(
+                    uid: m.uid,
+                    name: (m.name).isNotEmpty ? m.name : m.email,
+                  ),
+                )
+                .toList(),
+          );
+      final initial = await stream.first;
+      if (!mounted) return;
+
+      await showVoiceNowPopup(
+        context,
+        albumName: albumName,
+        initialParticipants: initial,
+        participantsStream: stream,
+        onLeave: () async {
+          await _listSvc.leaveVoice(albumId: targetAlbumId);
+          voiceOverlay.hide();
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('보이스톡 진입 실패: $e')));
+    }
+  }
+
   Future<String> _displayNameFor(String uid, {String? prefer}) async {
     // 1) 스트림에서 넘어온 이름이 있으면 최우선 사용
     final hint = prefer?.trim();
@@ -641,6 +709,16 @@ class _EditScreenState extends State<EditScreen> {
                             ),
                           ),
                           const Spacer(),
+                          GestureDetector(
+                            onTap: _onTapCall,
+                            child: Image.asset(
+                              'assets/icons/call_off.png',
+                              width: 36,
+                              height: 36,
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
@@ -1223,6 +1301,7 @@ class _EditScreenState extends State<EditScreen> {
                 ),
               ],
             ),
+
 
             // 하단 네비게이션 바
             Positioned(
