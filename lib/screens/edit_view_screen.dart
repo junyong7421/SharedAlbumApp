@@ -219,8 +219,6 @@ class _EditViewScreenState extends State<EditViewScreen> {
     Icons.hdr_strong, // 5 선명도(샤픈)
   ];
 
-  final int _selectedIndex = 2;
-
   final _svc = SharedAlbumService.instance;
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
 
@@ -1345,12 +1343,13 @@ class _EditViewScreenState extends State<EditViewScreen> {
       },
       child: Scaffold(
         backgroundColor: const Color(0xFFE6EBFE),
+        bottomNavigationBar: const CustomBottomNavBar(selectedIndex: 2), // ✅ 추가
         body: SafeArea(
           child: Stack(
             children: [
               // 내용
               ListView(
-                padding: EdgeInsets.zero,
+                padding: const EdgeInsets.only(bottom: 120), // ✅ 바텀바 높이+여유
                 children: [
                   Column(
                     children: [
@@ -1513,13 +1512,7 @@ class _EditViewScreenState extends State<EditViewScreen> {
                 ],
               ),
 
-              // 하단 네비게이션 바
-              Positioned(
-                bottom: 20,
-                left: 20,
-                right: 20,
-                child: CustomBottomNavBar(selectedIndex: _selectedIndex),
-              ),
+              
             ],
           ),
         ),
