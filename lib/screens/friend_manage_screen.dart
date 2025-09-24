@@ -23,6 +23,7 @@ class _FriendManageScreenState extends State<FriendManageScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFE6EBFE),
+      bottomNavigationBar: const CustomBottomNavBar(), // ✅ 추가 (selectedIndex 생략 가능: 자동 추론)
       body: SafeArea(
         child: Column(
           children: [
@@ -68,7 +69,7 @@ class _FriendManageScreenState extends State<FriendManageScreen> {
             // 친구 리스트 컨테이너
             Expanded(
               child: Container(
-                margin: const EdgeInsets.fromLTRB(40, 0, 40, 60),
+                margin: const EdgeInsets.fromLTRB(40, 0, 40, 16),
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
                   color: const Color(0xFFF6F9FF),
@@ -194,12 +195,6 @@ class _FriendManageScreenState extends State<FriendManageScreen> {
                   },
                 ),
               ),
-            ),
-
-            // 하단바
-            Padding(
-              padding: const EdgeInsets.only(bottom: 40, left: 20, right: 20),
-              child: CustomBottomNavBar(selectedIndex: _selectedIndex),
             ),
           ],
         ),
