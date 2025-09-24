@@ -374,10 +374,7 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
       final selected = await showModalBottomSheet<List<String>>(
         context: context,
         isScrollControlled: true,
-        backgroundColor: Colors.white,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-        ),
+        backgroundColor: Colors.transparent, // 시트 테두리/배경 커스텀
         builder: (_) => _FriendPickerSheet(
           friends: friends,
           alreadyMembers: existingMemberUids,
@@ -507,9 +504,8 @@ class _SharedAlbumListScreenState extends State<SharedAlbumListScreen> {
 
 /// 친구 선택 바텀시트
 class _FriendPickerSheet extends StatefulWidget {
-  final List<AlbumMember> friends;
+  final List /*<FriendInfo>*/ friends; // uid, name, email 필드가 있다고 가정
   final List<String> alreadyMembers;
-
   const _FriendPickerSheet({
     required this.friends,
     required this.alreadyMembers,
@@ -520,126 +516,219 @@ class _FriendPickerSheet extends StatefulWidget {
 }
 
 class _FriendPickerSheetState extends State<_FriendPickerSheet> {
-  final _selected = <String>{};
+  final _picked = <String>{};
 
   @override
   Widget build(BuildContext context) {
-    final notMembers = widget.friends
-        .where((f) => !widget.alreadyMembers.contains(f.uid))
-        .toList();
+    const borderColor = Color(0xFF625F8C);
+    const bg = Color(0xFFF6F9FF);
+    const textColor = Color(0xFF625F8C);
 
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
-        top: 12,
-        left: 12,
-        right: 12,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            height: 4,
-            width: 42,
-            decoration: BoxDecoration(
-              color: Colors.black26,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            '친구 선택',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-          ),
-          const SizedBox(height: 8),
+    return SafeArea(
+      child: LayoutBuilder(
+        builder: (ctx, cons) {
+          final double sheetW = cons.maxWidth > 520 ? 520.0 : cons.maxWidth;
 
-          Flexible(
-            child: notMembers.isEmpty
-                ? const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Text('추가 가능한 친구가 없습니다.'),
-                  )
-                : ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: notMembers.length,
-                    itemBuilder: (_, i) {
-                      final f = notMembers[i];
-                      final checked = _selected.contains(f.uid);
-                      return CheckboxListTile(
-                        value: checked,
-                        onChanged: (v) {
-                          setState(() {
-                            if (v == true) {
-                              _selected.add(f.uid);
-                            } else {
-                              _selected.remove(f.uid);
-                            }
-                          });
-                        },
-                        title: Text(f.name.isNotEmpty ? f.name : f.email),
-                        subtitle: f.name.isNotEmpty ? Text(f.email) : null,
-                        secondary: CircleAvatar(
-                          backgroundImage:
-                              (f.photoUrl != null && f.photoUrl!.isNotEmpty)
-                              ? NetworkImage(f.photoUrl!)
-                              : null,
-                          child: (f.photoUrl == null || f.photoUrl!.isEmpty)
-                              ? const Icon(Icons.person)
-                              : null,
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          const SizedBox(height: 8),
-
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _pill('취소', () => Navigator.pop(context, null)),
-              _pill(
-                '추가',
-                _selected.isEmpty
-                    ? null
-                    : () => Navigator.pop(context, _selected.toList()),
+          return Center(
+            child: Container(
+              width: sheetW,
+              constraints: const BoxConstraints(maxHeight: 560),
+              padding: const EdgeInsets.fromLTRB(20, 22, 20, 16),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: borderColor, width: 2),
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-        ],
-      ),
-    );
-  }
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 타이틀
+                  const Text(
+                    '친구 선택',
+                    style: TextStyle(
+                      color: textColor,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
 
-  Widget _pill(String label, VoidCallback? onTap) {
-    final disabled = onTap == null;
-    return Opacity(
-      opacity: disabled ? 0.6 : 1,
-      child: IgnorePointer(
-        ignoring: disabled,
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              gradient: const LinearGradient(
-                colors: [
-                  Color(0xFFC6DCFF),
-                  Color(0xFFD2D1FF),
-                  Color(0xFFF5CFFF),
+                  // 리스트
+                  Expanded(
+                    child: widget.friends.isEmpty
+                        ? const Center(
+                            child: Text(
+                              '추가할 친구가 없습니다.',
+                              style: TextStyle(color: textColor),
+                            ),
+                          )
+                        : ListView.separated(
+                            itemCount: widget.friends.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 8),
+                            itemBuilder: (_, i) {
+                              final f = widget.friends[i];
+                              final uid = (f.uid ?? '').toString();
+                              final name =
+                                  ((f.name ?? f.displayName ?? '').toString())
+                                      .trim();
+                              final email = (f.email ?? '').toString();
+
+                              final already = widget.alreadyMembers.contains(
+                                uid,
+                              );
+                              final selected = _picked.contains(uid);
+
+                              return Opacity(
+                                opacity: already ? 0.45 : 1.0,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(14),
+                                  onTap: already
+                                      ? null
+                                      : () {
+                                          setState(() {
+                                            if (selected) {
+                                              _picked.remove(uid);
+                                            } else {
+                                              _picked.add(uid);
+                                            }
+                                          });
+                                        },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withOpacity(0.65),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                name.isEmpty ? '이름 없음' : name,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: textColor,
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                email,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  color: textColor,
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        if (already)
+                                          const Text(
+                                            '이미 멤버',
+                                            style: TextStyle(
+                                              color: textColor,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          )
+                                        else
+                                          Checkbox(
+                                            value: selected,
+                                            onChanged: (_) {
+                                              setState(() {
+                                                if (selected) {
+                                                  _picked.remove(uid);
+                                                } else {
+                                                  _picked.add(uid);
+                                                }
+                                              });
+                                            },
+                                            activeColor: borderColor,
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // 버튼들 (취소/추가 둘 다 그라데이션 알약)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      InkWell(
+                        onTap: () => Navigator.pop(context),
+                        borderRadius: BorderRadius.circular(22),
+                        child: Container(
+                          width: 140,
+                          height: 44,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [
+                                Color(0xFFC6DCFF),
+                                Color(0xFFD2D1FF),
+                                Color(0xFFF5CFFF),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          child: const Text(
+                            '취소',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      InkWell(
+                        onTap: () => Navigator.pop(context, _picked.toList()),
+                        borderRadius: BorderRadius.circular(22),
+                        child: Container(
+                          width: 140,
+                          height: 44,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [
+                                Color(0xFFC6DCFF),
+                                Color(0xFFD2D1FF),
+                                Color(0xFFF5CFFF),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(22),
+                          ),
+                          child: const Text(
+                            '추가',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
