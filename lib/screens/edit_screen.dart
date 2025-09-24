@@ -252,11 +252,13 @@ class HeartForPhoto extends StatelessWidget {
           count: m,
           onTapHeart: () async {
             try {
+              // 좋아요 토글 (원본/편집본 구분)
               await svc.toggleLike(
                 uid: myUid,
                 albumId: albumId,
                 photoId: photoId,
                 like: !isLikedByMe,
+                isEdited: false, // 🔹 원본에서는 false
               );
             } catch (e) {
               if (!context.mounted) return;
@@ -558,6 +560,45 @@ class _EditScreenState extends State<EditScreen> {
     // 5) fallback: uid 끝 4자리
     final short = uid.length > 4 ? uid.substring(uid.length - 4) : uid;
     return _nameCache[uid] = '사용자-$short';
+  }
+
+  Future<void> _showLikedByPopup(List<String> likedUids) async {
+    // users/{uid}에서 이름 가져오기 (10개씩 whereIn)
+    final fs = FirebaseFirestore.instance;
+    final names = <String>[];
+    try {
+      for (int i = 0; i < likedUids.length; i += 10) {
+        final chunk = likedUids.skip(i).take(10).toList();
+        final qs = await fs
+            .collection('users')
+            .where(FieldPath.documentId, whereIn: chunk)
+            .get();
+        for (final d in qs.docs) {
+          final m = d.data();
+          final n = (m['displayName'] ?? m['name'] ?? '').toString().trim();
+          if (n.isNotEmpty) {
+            names.add(n);
+          } else {
+            final short = d.id.length > 4
+                ? d.id.substring(d.id.length - 4)
+                : d.id;
+            names.add('사용자-$short');
+          }
+        }
+      }
+    } catch (_) {
+      // 실패하면 uid 끝4자리 fallback
+      for (final u in likedUids) {
+        final short = u.length > 4 ? u.substring(u.length - 4) : u;
+        names.add('사용자-$short');
+      }
+    }
+
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      builder: (_) => LikedByPopup(memberNames: names),
+    );
   }
 
   // 처음 들어간(lead) 편집자 고르기: startedAt → updatedAt → uid 안정 정렬
@@ -1196,13 +1237,6 @@ class _EditScreenState extends State<EditScreen> {
                                             final thumbKey =
                                                 'edited_${it.id}_${it.originalPhotoId ?? ''}_${it.url}';
 
-                                            // 좋아요 타깃: 편집본은 원본 photoId가 있을 때만 표시
-                                            final likePhotoId =
-                                                (it.originalPhotoId ?? '')
-                                                    .isNotEmpty
-                                                ? it.originalPhotoId!
-                                                : null;
-
                                             return Stack(
                                               clipBehavior: Clip.none,
                                               children: [
@@ -1227,18 +1261,24 @@ class _EditScreenState extends State<EditScreen> {
                                                     ),
                                                   ),
                                                 ),
-                                                if (likePhotoId != null)
-                                                  Positioned(
-                                                    top: -6,
-                                                    right: -6,
-                                                    child: HeartForPhoto(
-                                                      albumId: widget.albumId,
-                                                      photoId: likePhotoId,
-                                                      size: 20,
-                                                      svc: _svc,
-                                                      myUid: _uid,
-                                                    ),
+
+                                                // 🟢 편집본 자체의 좋아요 하트 (edited/{editedId} 문서를 바라봄)
+                                                Positioned(
+                                                  top: -6,
+                                                  right: -6,
+                                                  child: _EditedLikeBadge(
+                                                    albumId: widget.albumId,
+                                                    editedId: it.id,
+                                                    myUid: _uid,
+                                                    svc: _svc,
+                                                    colorForUid:
+                                                        colorForUid, // 위에 있는 UID→Color 함수 재사용
+                                                    onShowLikers: (uids) =>
+                                                        _showLikedByPopup(
+                                                          uids,
+                                                        ), // 숫자/롱프레스 시 팝업
                                                   ),
+                                                ),
                                               ],
                                             );
                                           },
@@ -1355,116 +1395,202 @@ class _EditScreenState extends State<EditScreen> {
     }
   }
 
-  // 하단 액션: 편집된 사진 탭 시
+  // 하단 액션: 편집된 사진 탭 시  ✅ 크기 줄인 버전
   void _showEditedActions(BuildContext context, EditedPhoto item) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true, // 내용이 작아서 높이 최소화
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 22, horizontal: 16),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF6F9FF).withOpacity(0.95),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: const Color(0xFF625F8C), width: 2),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 편집하기
-                  _ActionRow(
-                    iconPath: 'assets/icons/edit.png',
-                    label: '편집하기',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      if (_isNavigating) return;
-                      _isNavigating = true;
-                      try {
-                        await _svc.setEditing(
-                          uid: _uid,
-                          albumId: widget.albumId,
-                          photoId: (item.originalPhotoId ?? '').isNotEmpty
-                              ? item.originalPhotoId
-                              : null,
-                          photoUrl: item.url,
-                          source: 'edited',
-                          editedId: item.id,
-                          originalPhotoId:
-                              ((item.originalPhotoId ?? '').isNotEmpty)
-                              ? item.originalPhotoId
-                              : null,
-                          userDisplayName: _meName,
-                        );
-                        if (!mounted) {
-                          _isNavigating = false;
-                          return;
-                        }
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => EditViewScreen(
-                              albumName: widget.albumName,
-                              albumId: widget.albumId,
-                              imagePath: item.url,
-                              editedId: item.id,
+        return GestureDetector(
+          // 바깥(투명 영역) 터치 시 닫힘
+          onTap: () => Navigator.pop(context),
+          behavior: HitTestBehavior.opaque,
+          child: SafeArea(
+            child: LayoutBuilder(
+              builder: (ctx, constraints) {
+                // 시트 사이즈 조절
+                final sheetW = math.min(constraints.maxWidth * 0.88, 420.0);
+                final maxSheetH = 260.0;
+                final btnW = math.min(320.0, sheetW * 0.56);
+
+                // ✅ 로컬 헬퍼: 아이콘 + 그라데이션 버튼 한 줄
+                Widget actionRowL(
+                  String icon,
+                  String label,
+                  VoidCallback onTap,
+                ) {
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Image.asset(
+                        icon,
+                        width: 32,
+                        height: 32,
+                        fit: BoxFit.contain,
+                      ),
+                      const SizedBox(width: 14),
+                      InkWell(
+                        onTap: onTap,
+                        borderRadius: BorderRadius.circular(24),
+                        child: Container(
+                          width: btnW,
+                          height: 52,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [
+                                Color(0xFFC6DCFF),
+                                Color(0xFFD2D1FF),
+                                Color(0xFFF5CFFF),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(24),
+                          ),
+                          child: Text(
+                            label,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 18,
                             ),
                           ),
-                        );
-                      } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('편집 세션 생성 실패: $e')),
-                          );
-                        }
-                      } finally {
-                        _isNavigating = false;
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 14),
+                        ),
+                      ),
+                    ],
+                  );
+                }
 
-                  // 다운로드
-                  _ActionRow(
-                    iconPath: 'assets/icons/download.png',
-                    label: '다운로드',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      await _downloadEditedPhoto(item.url);
-                    },
+                return Padding(
+                  // ⬆️ 더 올리고 싶으면 값을 늘리세요 (예: 56 → 72)
+                  padding: const EdgeInsets.only(bottom: 56),
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: sheetW,
+                        maxHeight: maxSheetH,
+                      ),
+                      // 내용부 탭이 배경으로 전파되지 않게 막기
+                      child: GestureDetector(
+                        onTap: () {},
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 16,
+                            horizontal: 14,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF6F9FF).withOpacity(0.96),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: const Color(0xFF625F8C),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              actionRowL(
+                                'assets/icons/edit.png',
+                                '편집하기',
+                                () async {
+                                  Navigator.pop(context);
+                                  if (_isNavigating) return;
+                                  _isNavigating = true;
+                                  try {
+                                    await _svc.setEditing(
+                                      uid: _uid,
+                                      albumId: widget.albumId,
+                                      photoId:
+                                          (item.originalPhotoId ?? '')
+                                              .isNotEmpty
+                                          ? item.originalPhotoId
+                                          : null,
+                                      photoUrl: item.url,
+                                      source: 'edited',
+                                      editedId: item.id,
+                                      originalPhotoId:
+                                          ((item.originalPhotoId ?? '')
+                                              .isNotEmpty)
+                                          ? item.originalPhotoId
+                                          : null,
+                                      userDisplayName: _meName,
+                                    );
+                                    if (!mounted) {
+                                      _isNavigating = false;
+                                      return;
+                                    }
+                                    await Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => EditViewScreen(
+                                          albumName: widget.albumName,
+                                          albumId: widget.albumId,
+                                          imagePath: item.url,
+                                          editedId: item.id,
+                                        ),
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        SnackBar(
+                                          content: Text('편집 세션 생성 실패: $e'),
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    _isNavigating = false;
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                              actionRowL(
+                                'assets/icons/download.png',
+                                '다운로드',
+                                () async {
+                                  Navigator.pop(context);
+                                  await _downloadEditedPhoto(item.url);
+                                },
+                              ),
+                              const SizedBox(height: 12),
+                              actionRowL(
+                                'assets/icons/delete_.png',
+                                '삭제',
+                                () async {
+                                  Navigator.pop(context);
+                                  try {
+                                    await _svc.deleteEditedPhoto(
+                                      albumId: widget.albumId,
+                                      editedId: item.id,
+                                    );
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('편집된 사진을 삭제했습니다.'),
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(content: Text('삭제 실패: $e')),
+                                    );
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
-                  const SizedBox(height: 14),
-
-                  // 삭제 (아이콘 이름 확인: delete.png 또는 delete_png.png)
-                  _ActionRow(
-                    iconPath: 'assets/icons/delete_.png', // ← 실제 파일명에 맞추세요
-                    label: '삭제',
-                    onTap: () async {
-                      Navigator.pop(context);
-                      try {
-                        await _svc.deleteEditedPhoto(
-                          albumId: widget.albumId,
-                          editedId: item.id,
-                        );
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('편집된 사진을 삭제했습니다.')),
-                        );
-                      } catch (e) {
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(
-                          context,
-                        ).showSnackBar(SnackBar(content: Text('삭제 실패: $e')));
-                      }
-                    },
-                  ),
-                ],
-              ),
+                );
+              },
             ),
           ),
         );
@@ -1473,7 +1599,7 @@ class _EditScreenState extends State<EditScreen> {
   }
 }
 
-/// 아이템 한 줄 (아이콘 + 그라데이션 버튼)
+/// 아이템 한 줄 (아이콘 + 버튼)  ✅ 아이콘 배경 제거, 아이콘 크게, 버튼 가로 줄이고 테두리 제거
 class _ActionRow extends StatelessWidget {
   final String iconPath;
   final String label;
@@ -1486,54 +1612,263 @@ class _ActionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 너무 작은 화면에서 넘치지 않도록 버튼 최대폭을 살짝 제한
+    final screenW = MediaQuery.of(context).size.width;
+    final maxButtonWidth = screenW.clamp(240.0, 320.0) - 40; // 대략 240~280 사이
+
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: const Color(0xFFF5CFFF),
-            borderRadius: BorderRadius.circular(12),
-          ),
+        // ▶ 아이콘: 배경 컨테이너 제거하고 크기 업
+        SizedBox(
+          width: 56,
+          height: 56,
           child: Center(
             child: Image.asset(
               iconPath,
-              width: 22,
-              height: 22,
+              width: 40, // 이전 22 → 34
+              height: 40,
               fit: BoxFit.contain,
             ),
           ),
         ),
-        const SizedBox(width: 16),
+        const SizedBox(width: 18),
+
+        // ▶ 버튼: 가로 폭을 줄이기 위해 고정/최대폭을 둔 SizedBox로 감싸고, 테두리 제거
         Expanded(
-          child: InkWell(
-            borderRadius: BorderRadius.circular(22),
-            onTap: onTap,
-            child: Container(
-              height: 48,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [
-                    Color(0xFFC6DCFF),
-                    Color(0xFFD2D1FF),
-                    Color(0xFFF5CFFF),
-                  ],
-                ),
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: const Color(0xFF625F8C), width: 1.5),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: 180,
+                maxWidth: maxButtonWidth, // 화면에 따라 240~280 정도
               ),
-              child: Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(28),
+                onTap: onTap,
+                child: Container(
+                  height: 56, // 살짝 키움
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [
+                        Color(0xFFC6DCFF),
+                        Color(0xFFD2D1FF),
+                        Color(0xFFF5CFFF),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(28),
+                    // ❌ 버튼 테두리 제거
+                  ),
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                    ),
+                  ),
                 ),
               ),
             ),
           ),
         ),
       ],
+    );
+  }
+}
+
+class HeartForEdited extends StatelessWidget {
+  final String albumId;
+  final String editedId;
+  final double size;
+  final SharedAlbumService svc;
+  final String myUid;
+
+  const HeartForEdited({
+    super.key,
+    required this.albumId,
+    required this.editedId,
+    required this.size,
+    required this.svc,
+    required this.myUid,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Set<String>>(
+      stream: svc.watchEditedLikedBy(albumId: albumId, editedId: editedId),
+      builder: (context, snap) {
+        final likedBy = snap.data ?? const <String>{};
+        final isLiked = likedBy.contains(myUid);
+
+        return GestureDetector(
+          onTap: () async {
+            try {
+              await svc.toggleLikeEdited(
+                albumId: albumId,
+                editedId: editedId,
+                uid: myUid,
+                like: !isLiked,
+              );
+            } catch (e) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
+            }
+          },
+          child: _HeartBadge(count: likedBy.length, liked: isLiked, size: size),
+        );
+      },
+    );
+  }
+}
+
+class _EditedLikeBadge extends StatelessWidget {
+  final String albumId;
+  final String editedId;
+  final String myUid;
+  final SharedAlbumService svc;
+  final Color Function(String uid) colorForUid;
+  final int maxSlices;
+  final void Function(List<String> uids) onShowLikers;
+
+  const _EditedLikeBadge({
+    required this.albumId,
+    required this.editedId,
+    required this.myUid,
+    required this.svc,
+    required this.colorForUid,
+    required this.onShowLikers,
+    this.maxSlices = 12,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Set<String>>(
+      stream: svc.watchEditedLikedBy(albumId: albumId, editedId: editedId),
+      builder: (context, snap) {
+        final likedSet = snap.data ?? const <String>{};
+        final likedUids = likedSet.toList()..sort();
+        final isLikedByMe = likedSet.contains(myUid);
+        final m = likedUids.length;
+        final total = m == 0 ? 0 : (m > maxSlices ? maxSlices : m);
+        final colors = likedUids.map(colorForUid).take(total).toList();
+
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black12,
+                blurRadius: 8,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 하트: 탭=토글, 롱프레스=좋아요한 사람 팝업
+              GestureDetector(
+                onTap: () async {
+                  try {
+                    await svc.toggleLikeEdited(
+                      albumId: albumId,
+                      editedId: editedId,
+                      uid: myUid,
+                      like: !isLikedByMe,
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(SnackBar(content: Text('좋아요 실패: $e')));
+                  }
+                },
+                onLongPress: () => onShowLikers(likedUids),
+                child: CustomPaint(
+                  size: const Size.square(22),
+                  painter: _HeartPainter(
+                    totalSlots: total,
+                    filledColors: colors,
+                    outlineColor: isLikedByMe
+                        ? const Color(0xFF625F8C)
+                        : Colors.grey.shade400,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              // 숫자: 탭=팝업
+              GestureDetector(
+                onTap: () => onShowLikers(likedUids),
+                child: Container(
+                  width: 22,
+                  height: 22,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE6E6EB),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Text(
+                    '$m',
+                    style: const TextStyle(
+                      color: Color(0xFF4C4A64),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _HeartBadge extends StatelessWidget {
+  final int count;
+  final bool liked;
+  final double size;
+  const _HeartBadge({
+    required this.count,
+    required this.liked,
+    required this.size,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: const [
+          BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2)),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            liked ? Icons.favorite : Icons.favorite_border,
+            size: size,
+            color: liked ? const Color(0xFF625F8C) : Colors.grey.shade500,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '$count',
+            style: const TextStyle(
+              color: Color(0xFF4C4A64),
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
