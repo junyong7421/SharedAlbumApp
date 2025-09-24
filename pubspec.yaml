@@ -32,6 +32,22 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.13.1   # ✅ 여기에 추가
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+
+  # iOS: 풀블리드 한 장
+  image_path_ios: "assets/icons/icon_fullbleed_ios.png"
+  remove_alpha_ios: true
+
+  # ✅ Android 쪽은 “기본 경로 1개”가 필요(검증용)
+  image_path_android: "assets/icons/icon_fullbleed_ios.png"
+
+  # ✅ 실제 표시될 건 Adaptive 아이콘(전경/배경 분리)
+  adaptive_icon_background: "#E9E0F4"
+  adaptive_icon_foreground: "assets/icons/icon_fg_android_safe2.png"
 
 dependency_overrides:
   google_sign_in: 6.1.0
