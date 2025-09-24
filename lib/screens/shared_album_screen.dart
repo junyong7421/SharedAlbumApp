@@ -404,236 +404,306 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
   // ---------------------- Build ----------------------
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFE6EBFE),
-      bottomNavigationBar: const Padding(
-        padding: EdgeInsets.only(bottom: 40, left: 20, right: 20),
-        child: CustomBottomNavBar(selectedIndex: 0),
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            const SizedBox(height: 20),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  // [변경] UserIconButton에 photoUrl 전달 (로그아웃 다이얼로그 기능 그대로)
-                  UserIconButton(
-                    photoUrl:
-                        FirebaseAuth.instance.currentUser?.photoURL, // [추가]
-                    radius: 24, // [유지/선택]
-                  ),
-                  const SizedBox(width: 10),
-                  const Text(
-                    '공유앨범',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF625F8C),
-                    ),
-                  ),
-                  const Spacer(),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 16),
-            Expanded(
-              child: Container(
-                margin: const EdgeInsets.fromLTRB(40, 0, 40, 60),
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF6F9FF),
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                child: Column(
-                  children: [
-                    if (_selectedAlbumId == null) ...[
-                      _buildSharedAlbumHeader(),
-                      const SizedBox(height: 12),
-                    ],
-                    Expanded(
-                      child: _selectedAlbumId == null
-                          ? _buildMainAlbumList()
-                          : _buildExpandedAlbumView(),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSharedAlbumHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(30),
-        gradient: const LinearGradient(
-          colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
-        ),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+Widget build(BuildContext context) {
+  return Scaffold(
+    backgroundColor: const Color(0xFFE6EBFE),
+    bottomNavigationBar: const Padding(
+      padding: EdgeInsets.only(bottom: 40, left: 20, right: 20),
+      child: CustomBottomNavBar(selectedIndex: 0),
+    ),
+    body: SafeArea(
+      child: Column(
         children: [
-          const Text(
-            'Shared Album',
-            style: TextStyle(
-              color: Color(0xFF625F8C),
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
+          const SizedBox(height: 20),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                // [변경] UserIconButton에 photoUrl 전달 (로그아웃 다이얼로그 기능 그대로)
+                UserIconButton(
+                  photoUrl: FirebaseAuth.instance.currentUser?.photoURL, // [추가]
+                  radius: 24, // [유지/선택]
+                ),
+                const SizedBox(width: 10),
+                const Text(
+                  '공유앨범',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF625F8C),
+                  ),
+                ),
+                const Spacer(),
+              ],
             ),
           ),
-          GestureDetector(
-            onTap: _showAddAlbumDialog,
+
+          const SizedBox(height: 16),
+          Expanded(
             child: Container(
-              width: 24,
-              height: 24,
-              decoration: const BoxDecoration(
-                color: Color(0xFF625F8C),
-                shape: BoxShape.circle,
+              margin: const EdgeInsets.fromLTRB(40, 0, 40, 60),
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF6F9FF),
+                borderRadius: BorderRadius.circular(30),
               ),
-              child: const Icon(Icons.add, color: Colors.white, size: 16),
+              child: Column(
+                children: [
+                  if (_selectedAlbumId == null) ...[
+                    _buildSharedAlbumHeader(),
+                    const SizedBox(height: 12),
+                  ],
+                  Expanded(
+                    child: _selectedAlbumId == null
+                        ? _buildMainAlbumList()
+                        : _buildExpandedAlbumView(),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
-  // ---------------------- Album List ----------------------
-
-  Widget _buildMainAlbumList() {
-    return StreamBuilder<List<Album>>(
-      stream: _svc.watchAlbums(_uid),
-      builder: (context, snap) {
-        if (snap.hasError) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                '에러: ${snap.error}',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF625F8C)),
-              ),
+Widget _buildSharedAlbumHeader() {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(30),
+      gradient: const LinearGradient(
+        colors: [Color(0xFFC6DCFF), Color(0xFFD2D1FF), Color(0xFFF5CFFF)],
+      ),
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        const Text(
+          'Shared Album',
+          style: TextStyle(
+            color: Color(0xFF625F8C),
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+        GestureDetector(
+          onTap: _showAddAlbumDialog,
+          child: Container(
+            width: 24,
+            height: 24,
+            decoration: const BoxDecoration(
+              color: Color(0xFF625F8C),
+              shape: BoxShape.circle,
             ),
-          );
-        }
+            child: const Icon(Icons.add, color: Colors.white, size: 16),
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
-        if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(color: Color(0xFF625F8C)),
-          );
-        }
+// ---------------------- Album List ----------------------
 
-        final albums = snap.data ?? [];
-        if (albums.isEmpty) {
-          return const Center(
+Widget _buildMainAlbumList() {
+  return StreamBuilder<List<Album>>(
+    stream: _svc.watchAlbums(_uid),
+    builder: (context, snap) {
+      if (snap.hasError) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
             child: Text(
-              '아직 생성된 앨범이 없습니다',
-              style: TextStyle(color: Color(0xFF625F8C), fontSize: 16),
+              '에러: ${snap.error}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xFF625F8C)),
             ),
-          );
-        }
+          ),
+        );
+      }
 
-        return ListView.builder(
-          itemCount: albums.length,
-          itemBuilder: (context, index) {
-            final album = albums[index];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: GestureDetector(
-                onTap: () {
-                  setState(() {
-                    _selectedAlbumId = album.id;
-                    _selectedAlbumTitle = album.title;
-                    _selectedImageIndex = null;
-                  });
-                },
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFD9E2FF),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  padding: const EdgeInsets.all(10),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              album.title,
-                              style: const TextStyle(
-                                color: Color(0xFF625F8C),
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.add_photo_alternate,
-                              color: Color(0xFF625F8C),
-                            ),
-                            tooltip: '사진 추가',
-                            onPressed: () => _addPhotos(album.id),
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.edit,
-                              color: Color(0xFF625F8C),
-                            ),
-                            tooltip: '이름 변경',
-                            onPressed: () => _showRenameAlbumDialog(
-                              albumId: album.id,
-                              currentTitle: album.title,
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              Icons.delete,
-                              color: Color(0xFF625F8C),
-                            ),
-                            onPressed: () => _deleteAlbum(album.id),
-                          ),
-                        ],
-                      ),
-                      if (album.coverPhotoUrl != null &&
-                          album.coverPhotoUrl!.isNotEmpty)
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.network(
-                            album.coverPhotoUrl!,
-                            width: double.infinity,
-                            height: 180,
-                            fit: BoxFit.cover,
-                          ),
-                        )
-                      else
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+      if (snap.connectionState == ConnectionState.waiting) {
+        return const Center(
+          child: CircularProgressIndicator(color: Color(0xFF625F8C)),
+        );
+      }
+
+      final albums = snap.data ?? [];
+      if (albums.isEmpty) {
+        return const Center(
+          child: Text(
+            '아직 생성된 앨범이 없습니다',
+            style: TextStyle(color: Color(0xFF625F8C), fontSize: 16),
+          ),
+        );
+      }
+
+      return ListView.builder(
+        itemCount: albums.length,
+        itemBuilder: (context, index) {
+          final album = albums[index];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _selectedAlbumId = album.id;
+                  _selectedAlbumTitle = album.title;
+                  _selectedImageIndex = null;
+                });
+              },
+              child: Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD9E2FF),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
                           child: Text(
-                            '사진 ${album.photoCount}장',
-                            style: const TextStyle(color: Color(0xFF625F8C)),
+                            album.title,
+                            style: const TextStyle(
+                              color: Color(0xFF625F8C),
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                    ],
-                  ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.add_photo_alternate,
+                            color: Color(0xFF625F8C),
+                          ),
+                          tooltip: '사진 추가',
+                          onPressed: () => _addPhotos(album.id),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.edit,
+                            color: Color(0xFF625F8C),
+                          ),
+                          tooltip: '이름 변경',
+                          onPressed: () => _showRenameAlbumDialog(
+                            albumId: album.id,
+                            currentTitle: album.title,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.delete,
+                            color: Color(0xFF625F8C),
+                          ),
+                          onPressed: () => _deleteAlbum(album.id),
+                        ),
+                      ],
+                    ),
+
+                    // ============== 썸네일(콜라주) 영역 ==============
+                    SizedBox(
+                      height: 180,
+                      child: StreamBuilder<List<Photo>>(
+                        key: ValueKey('album-${album.id}-thumbs'),
+                        stream: _svc.watchPhotos(uid: _uid, albumId: album.id),
+                        builder: (context, psnap) {
+                          if (psnap.hasError) {
+                            return const Center(
+                              child: Text(
+                                '썸네일 로드 실패',
+                                style: TextStyle(color: Color(0xFF625F8C)),
+                              ),
+                            );
+                          }
+                          if (psnap.connectionState == ConnectionState.waiting) {
+                            return const Center(
+                              child: CircularProgressIndicator(
+                                color: Color(0xFF625F8C),
+                              ),
+                            );
+                          }
+
+                          final photos = (psnap.data ?? []);
+                          if (photos.isEmpty) {
+                            // 사진 없으면 coverPhotoUrl 있으면 한 장, 없으면 문구
+                            final cover = album.coverPhotoUrl;
+                            if (cover != null && cover.isNotEmpty) {
+                              return ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.network(
+                                  cover,
+                                  width: double.infinity,
+                                  height: 180,
+                                  fit: BoxFit.cover,
+                                ),
+                              );
+                            }
+                            return const Center(
+                              child: Text(
+                                '사진이 없습니다',
+                                style: TextStyle(color: Color(0xFF625F8C)),
+                              ),
+                            );
+                          }
+
+                          // 최근 4장까지만 사용
+                          final list = photos.take(4).toList();
+
+                          // 1장일 땐 크게 한 장
+                          if (list.length == 1) {
+                            final url = list.first.url;
+                            if (url.isEmpty) {
+                              return const Center(
+                                child: Text(
+                                  '이미지 URL 없음',
+                                  style:
+                                      TextStyle(color: Color(0xFF625F8C)),
+                                ),
+                              );
+                            }
+                            return ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.network(
+                                url,
+                                width: double.infinity,
+                                height: 180,
+                                fit: BoxFit.cover,
+                              ),
+                            );
+                          }
+
+                          // 2~4장일 땐 2x2 콜라주
+                          // 2~4장일 땐 2x2 콜라주 (항상 4등분 고정)
+final urls4 = List<String>.generate(
+  4,
+  (i) => i < list.length ? list[i].url : '',
+);
+
+return ClipRRect(
+  borderRadius: BorderRadius.circular(12),
+  child: _fixedCollage2x2(urls4),
+);
+
+                        },
+                      ),
+                    ),
+                    // ===============================================
+                  ],
                 ),
               ),
-            );
-          },
-        );
-      },
-    );
-  }
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
 
   // ---------------------- Album Detail ----------------------
 
@@ -1050,6 +1120,55 @@ class _SharedAlbumScreenState extends State<SharedAlbumScreen> {
       ),
     );
   }
+
+// 2x2 고정 콜라주(항상 동일한 크기 4칸)
+Widget _fixedCollage2x2(List<String> urls) {
+  const gap = 2.0; // 칸 사이 간격
+  return SizedBox(
+    width: double.infinity,
+    height: 180, // 부모 SizedBox 높이에 맞춰 동일 비율 유지
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(
+            children: [
+              Expanded(child: _collageTile(urls[0])),
+              const SizedBox(height: gap),
+              Expanded(child: _collageTile(urls[2])),
+            ],
+          ),
+        ),
+        const SizedBox(width: gap),
+        Expanded(
+          child: Column(
+            children: [
+              Expanded(child: _collageTile(urls[1])),
+              const SizedBox(height: gap),
+              Expanded(child: _collageTile(urls[3])),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+// 각 칸: 이미지가 없으면 플레이스홀더로 채움
+Widget _collageTile(String url) {
+  if (url.isEmpty) {
+    return const ColoredBox(color: Color(0xFFE6EBFE)); // 빈 칸 색상
+  }
+  return Image.network(
+    url,
+    fit: BoxFit.cover,           // 칸을 꽉 채우되 중심으로 크롭
+    width: double.infinity,
+    height: double.infinity,
+  );
+}
+
+
+
+
 
   Widget _pill(String text) {
     return Container(
