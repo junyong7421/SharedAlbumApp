@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sharedalbumapp/screens/login_screen.dart';
 import '../screens/login_choice_screen.dart';
 
 // [유지] Firebase/GoogleSignIn
@@ -78,7 +79,7 @@ class UserIconButton extends StatelessWidget {
                         Navigator.pushAndRemoveUntil(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => const LoginChoiceScreen(),
+                            builder: (_) => LoginScreen(),
                           ),
                           (route) => false,
                         );
